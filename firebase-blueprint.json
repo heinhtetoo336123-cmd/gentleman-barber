@@ -1,0 +1,274 @@
+{
+  "entities": {
+    "bookings": {
+      "title": "Bookings",
+      "description": "Barber shop appointments and time-slot holds",
+      "type": "object",
+      "properties": {
+        "bookingCode": { "type": "string" },
+        "serviceId": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "designerId": { "type": "string" },
+        "designerName": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerEmail": { "type": "string" },
+        "date": { "type": "string" },
+        "timeSlot": { "type": "string" },
+        "status": { "type": "string" },
+        "price": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "paymentTxnId": { "type": "string" },
+        "paymentSlipUrl": { "type": "string" },
+        "adminReply": { "type": "string" },
+        "promoCode": { "type": "string" },
+        "discountAmount": { "type": "number" },
+        "holdExpiresAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "statusHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string" },
+              "timestamp": { "type": "string" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["bookingCode", "serviceName", "designerId", "customerName", "customerPhone", "date", "timeSlot", "status"]
+    },
+    "services": {
+      "title": "Services",
+      "description": "Barber shop service catalog",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "durationMinutes": { "type": "number" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "popular": { "type": "boolean" }
+      },
+      "required": ["name", "price", "durationMinutes"]
+    },
+    "designers": {
+      "title": "Designers",
+      "description": "Barber stylists and availability",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "title": { "type": "string" },
+        "avatar": { "type": "string" },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "rating": { "type": "number" },
+        "specialties": { "type": "array", "items": { "type": "string" } },
+        "bio": { "type": "string" },
+        "workingDays": { "type": "array", "items": { "type": "string" } },
+        "timeSlots": { "type": "array", "items": { "type": "string" } },
+        "active": { "type": "boolean" }
+      },
+      "required": ["name", "title"]
+    },
+    "clients": {
+      "title": "Clients",
+      "description": "Registered shop clients and loyalty tiers",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "memberTier": { "type": "string" },
+        "points": { "type": "number" },
+        "joinedDate": { "type": "string" },
+        "preferredBarberName": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["name", "phone", "memberTier"]
+    },
+    "promos": {
+      "title": "Promo Codes",
+      "description": "Discount coupons and promotion rules",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "discountType": { "type": "string" },
+        "discountValue": { "type": "number" },
+        "minOrderAmount": { "type": "number" },
+        "memberTierRequired": { "type": "string" },
+        "maxUses": { "type": "number" },
+        "usedCount": { "type": "number" },
+        "expiryDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "description": { "type": "string" }
+      },
+      "required": ["code", "discountType", "discountValue"]
+    },
+    "settings": {
+      "title": "Settings",
+      "description": "Payment and social contact settings",
+      "type": "object",
+      "properties": {
+        "kpayAccountName": { "type": "string" },
+        "kpayNumber": { "type": "string" },
+        "waveAccountName": { "type": "string" },
+        "waveNumber": { "type": "string" },
+        "viberLink": { "type": "string" },
+        "viberPhone": { "type": "string" },
+        "shopPhone": { "type": "string" },
+        "shopAddress": { "type": "string" }
+      }
+    },
+    "notifications": {
+      "title": "Notifications",
+      "description": "User and admin notifications",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "read": { "type": "boolean" },
+        "type": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "forRole": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" }
+      }
+    },
+    "audit_logs": {
+      "title": "Audit Logs",
+      "description": "Admin activity and staff audit logs",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "adminName": { "type": "string" },
+        "timestamp": { "type": "string" }
+      }
+    },
+    "credentials": {
+      "title": "System Credentials",
+      "description": "Salted cryptographic hashes for admin & superadmin authentication",
+      "type": "object",
+      "properties": {
+        "adminHash": { "type": "string" },
+        "adminPinHash": { "type": "string" },
+        "superAdminHash": { "type": "string" },
+        "superAdminPinHash": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "expenses": {
+      "title": "Shop Expenses",
+      "description": "Daily and periodic barber shop operating expenditures",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "date": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["title", "amount", "category", "date"]
+    },
+    "expense_presets": {
+      "title": "Expense Presets",
+      "description": "Customizable expense categories",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "category": { "type": "string" }
+      }
+    },
+    "products": {
+      "title": "Retail Products",
+      "description": "POS product catalog including pomades, hair care, and oils",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string" },
+        "stockCount": { "type": "number" },
+        "barberCommissionPercent": { "type": "number" }
+      },
+      "required": ["name", "price"]
+    },
+    "retail_sales": {
+      "title": "Retail Sales",
+      "description": "POS product transactions and barber retail commissions",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "quantity": { "type": "number" },
+        "unitPrice": { "type": "number" },
+        "totalPrice": { "type": "number" },
+        "barberId": { "type": "string" },
+        "barberName": { "type": "string" },
+        "barberCommissionAmount": { "type": "number" },
+        "date": { "type": "string" },
+        "paymentMethod": { "type": "string" }
+      },
+      "required": ["productName", "totalPrice", "date"]
+    }
+  },
+  "firestore": {
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/bookings" },
+      "description": "Barber shop appointments and time-slot holds"
+    },
+    "/services/{serviceId}": {
+      "schema": { "$ref": "#/entities/services" },
+      "description": "Barber shop service catalog"
+    },
+    "/designers/{designerId}": {
+      "schema": { "$ref": "#/entities/designers" },
+      "description": "Barber stylists and availability"
+    },
+    "/clients/{clientId}": {
+      "schema": { "$ref": "#/entities/clients" },
+      "description": "Registered shop clients and loyalty tiers"
+    },
+    "/promos/{promoId}": {
+      "schema": { "$ref": "#/entities/promos" },
+      "description": "Discount coupons and promotion rules"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/settings" },
+      "description": "Payment and social contact settings"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/notifications" },
+      "description": "User and admin notifications"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/audit_logs" },
+      "description": "Admin activity and staff audit logs"
+    },
+    "/credentials/{credentialId}": {
+      "schema": { "$ref": "#/entities/credentials" },
+      "description": "Salted cryptographic hashes for admin & superadmin authentication"
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/expenses" },
+      "description": "Shop operating expenses"
+    },
+    "/expense_presets/{presetId}": {
+      "schema": { "$ref": "#/entities/expense_presets" },
+      "description": "Expense category presets"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/products" },
+      "description": "POS product catalog items"
+    },
+    "/retail_sales/{saleId}": {
+      "schema": { "$ref": "#/entities/retail_sales" },
+      "description": "POS product sales records"
+    }
+  }
+}

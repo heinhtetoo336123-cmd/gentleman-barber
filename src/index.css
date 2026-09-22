@@ -1,0 +1,213 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --md-sys-color-background: #ECECED;
+    --md-sys-color-surface: #FFFFFF;
+    --md-sys-color-surface-dim: #E5E5EA;
+    --md-sys-color-surface-container: #FFFFFF;
+    --md-sys-color-on-surface: #000000;
+    --md-sys-color-outline: #D1D1D6;
+    --md-sys-color-primary: #10B981;
+    --md-sys-color-on-primary: #FFFFFF;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Plus Jakarta Sans', 'Noto Sans Myanmar', 'Padauk', 'Pyidaungsu', sans-serif;
+  }
+
+  html, body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Plus Jakarta Sans', 'Noto Sans Myanmar', 'Padauk', 'Pyidaungsu', sans-serif;
+    background-color: #ECECED;
+    color: #000000;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    touch-action: pan-x pan-y;
+    text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior-y: contain;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Safe Area Padding support */
+  .pt-safe {
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
+  }
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
+  }
+  .safe-top {
+    padding-top: max(0px, env(safe-area-inset-top, 0px));
+  }
+  .safe-bottom {
+    padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Refined PWA Safe Area: Aligns header directly below device status bar without excessive gap */
+  .header-safe-top {
+    padding-top: max(0px, env(safe-area-inset-top, 0px));
+  }
+  .main-content-top-offset {
+    padding-top: calc(3.75rem + env(safe-area-inset-top, 0px));
+  }
+
+  @media (display-mode: standalone), (display-mode: fullscreen) {
+    .header-safe-top {
+      padding-top: max(0.5rem, env(safe-area-inset-top, 0.5rem)) !important;
+    }
+    .main-content-top-offset {
+      padding-top: calc(4.25rem + env(safe-area-inset-top, 0.5rem)) !important;
+    }
+  }
+
+  /* Critical mobile zoom prevention: iOS Safari zooms viewport when input font-size is < 16px */
+  input, textarea, select {
+    font-size: 16px !important;
+    touch-action: manipulation;
+  }
+
+  button, a {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.burmese-font {
+  font-family: 'Noto Sans Myanmar', 'Padauk', 'Pyidaungsu', sans-serif !important;
+}
+
+/* iOS Keyboard / Native Clean Tokens: Soft Gray canvas #ECECED, Pure White Key Surfaces #FFFFFF, Deep Black #000000 */
+.ios-key-card {
+  background-color: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 1.25rem;
+  color: #000000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ios-key-btn {
+  background-color: #FFFFFF;
+  color: #000000;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 0.875rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: all 0.1s ease-in-out;
+}
+
+.ios-key-btn:active {
+  transform: scale(0.97);
+  background-color: #E5E5EA;
+}
+
+.material-card {
+  background-color: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 1.25rem;
+  color: #000000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.material-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.material-card-dark {
+  background-color: #18181B;
+  border: 1px solid #27272A;
+  border-radius: 1.25rem;
+  color: #FFFFFF;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.material-btn-primary {
+  background-color: #10B981;
+  color: #FFFFFF;
+  border-radius: 1rem;
+  font-weight: 700;
+  transition: all 0.15s ease-in-out;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+.material-btn-primary:hover {
+  background-color: #059669;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.45);
+}
+
+.material-btn-primary:active {
+  transform: scale(0.99);
+  background-color: #047857;
+}
+
+.material-btn-secondary {
+  background-color: #18181B;
+  color: #FFFFFF;
+  border: 1px solid #27272A;
+  border-radius: 1rem;
+  font-weight: 600;
+  transition: all 0.15s ease-in-out;
+}
+
+.material-btn-secondary:hover {
+  background-color: #27272A;
+  border-color: #10B981;
+  color: #10B981;
+}
+
+.material-chip {
+  border-radius: 9999px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  border: 1px solid #E4E4E7;
+  background-color: #FFFFFF;
+  color: #18181B;
+}
+
+/* Monochrome Liquid Glass & Material Surfaces */
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(228, 228, 231, 0.9);
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.06);
+}
+
+.liquid-glass-dark {
+  background: rgba(24, 24, 27, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(39, 39, 42, 0.9);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+}
+
+.liquid-glass-tab {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid #E4E4E7;
+  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* Custom scrollbar utility */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 5px;
+  width: 5px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #F4F4F5;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #D4D4D8;
+  border-radius: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #A1A1AA;
+}
+

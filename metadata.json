@@ -1,0 +1,6 @@
+{
+  "name": "GENTLEMAN",
+  "description": "Mobile-first PWA booking app for GENTLEMAN Barber Shop with appointment tracking, service catalog, and real-time management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

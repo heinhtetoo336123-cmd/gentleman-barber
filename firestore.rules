@@ -1,0 +1,208 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Security Gate: Default Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.:@]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Services Collection
+    function isValidService(data) {
+      return (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 100)) &&
+             (!('price' in data) || (data.price is number && data.price >= 0 && data.price <= 10000000)) &&
+             (!('durationMinutes' in data) || (data.durationMinutes is number && data.durationMinutes > 0 && data.durationMinutes <= 600));
+    }
+
+    match /services/{serviceId} {
+      allow get: if isValidId(serviceId);
+      allow list: if true;
+      allow create, update: if isValidId(serviceId) && isValidService(incoming());
+      allow delete: if isValidId(serviceId);
+    }
+
+    // 3. Designers / Stylists Collection
+    function isValidDesigner(data) {
+      return (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 100)) &&
+             (!('title' in data) || (data.title is string && data.title.size() <= 100));
+    }
+
+    match /designers/{designerId} {
+      allow get: if isValidId(designerId);
+      allow list: if true;
+      allow create, update: if isValidId(designerId) && isValidDesigner(incoming());
+      allow delete: if isValidId(designerId);
+    }
+
+    // 4. Bookings Collection
+    function isValidBooking(data) {
+      return (!('bookingCode' in data) || (data.bookingCode is string && data.bookingCode.size() <= 50)) &&
+             (!('serviceName' in data) || (data.serviceName is string && data.serviceName.size() <= 100)) &&
+             (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 100)) &&
+             (!('date' in data) || (data.date is string && data.date.size() <= 30)) &&
+             (!('timeSlot' in data) || (data.timeSlot is string && data.timeSlot.size() <= 30)) &&
+             (!('status' in data) || (data.status is string && data.status.size() <= 30));
+    }
+
+    match /bookings/{bookingId} {
+      allow get: if isValidId(bookingId);
+      allow list: if true;
+      allow create: if isValidId(bookingId) && isValidBooking(incoming());
+      allow update: if isValidId(bookingId) && isValidBooking(incoming());
+      allow delete: if isValidId(bookingId);
+    }
+
+    // 5. Clients Collection
+    function isValidClient(data) {
+      return (!('name' in data) || (data.name is string && data.name.size() <= 100)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 50)) &&
+             (!('memberTier' in data) || (data.memberTier is string && data.memberTier.size() <= 30));
+    }
+
+    match /clients/{clientId} {
+      allow get: if isValidId(clientId);
+      allow list: if true;
+      allow create, update: if isValidId(clientId) && isValidClient(incoming());
+      allow delete: if isValidId(clientId);
+    }
+
+    // 6. Promos Collection
+    function isValidPromo(data) {
+      return (!('code' in data) || (data.code is string && data.code.size() <= 50)) &&
+             (!('discountType' in data) || (data.discountType is string && data.discountType.size() <= 30)) &&
+             (!('discountValue' in data) || (data.discountValue is number && data.discountValue >= 0));
+    }
+
+    match /promos/{promoId} {
+      allow get: if isValidId(promoId);
+      allow list: if true;
+      allow create, update: if isValidId(promoId) && isValidPromo(incoming());
+      allow delete: if isValidId(promoId);
+    }
+
+    // 7. Settings Collection
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId);
+      allow delete: if isValidId(settingId);
+    }
+
+    // 8. Notifications Collection
+    function isValidNotification(data) {
+      return (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
+             (!('message' in data) || (data.message is string && data.message.size() <= 1000));
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId);
+      allow list: if true;
+      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
+      allow delete: if isValidId(notificationId);
+    }
+
+    // 9. Audit Logs Collection
+    function isValidAuditLog(data) {
+      return (!('action' in data) || (data.action is string && data.action.size() <= 200)) &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 2000));
+    }
+
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId);
+      allow list: if true;
+      allow create, update: if isValidId(logId) && isValidAuditLog(incoming());
+      allow delete: if isValidId(logId);
+    }
+
+    // 10. Expenses Collections (shop_expenses & expenses)
+    function isValidExpense(data) {
+      return (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
+             (!('amount' in data) || (data.amount is number && data.amount >= 0)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 100)) &&
+             (!('date' in data) || (data.date is string && data.date.size() <= 50));
+    }
+
+    match /shop_expenses/{expenseId} {
+      allow get: if isValidId(expenseId);
+      allow list: if true;
+      allow create, update: if isValidId(expenseId) && isValidExpense(incoming());
+      allow delete: if isValidId(expenseId);
+    }
+
+    match /expenses/{expenseId} {
+      allow get: if isValidId(expenseId);
+      allow list: if true;
+      allow create, update: if isValidId(expenseId) && isValidExpense(incoming());
+      allow delete: if isValidId(expenseId);
+    }
+
+    // 11. Expense Presets Collection
+    match /expense_presets/{presetId} {
+      allow get: if isValidId(presetId);
+      allow list: if true;
+      allow create, update: if isValidId(presetId);
+      allow delete: if isValidId(presetId);
+    }
+
+    // 12. Retail Products Collections (retail_products & products)
+    function isValidProduct(data) {
+      return (!('name' in data) || (data.name is string && data.name.size() <= 200)) &&
+             (!('price' in data) || (data.price is number && data.price >= 0));
+    }
+
+    match /retail_products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+      allow create, update: if isValidId(productId) && isValidProduct(incoming());
+      allow delete: if isValidId(productId);
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+      allow create, update: if isValidId(productId) && isValidProduct(incoming());
+      allow delete: if isValidId(productId);
+    }
+
+    // 13. Retail Sales Collection (POS Sales Records)
+    function isValidRetailSale(data) {
+      return (!('productName' in data) || (data.productName is string && data.productName.size() <= 200)) &&
+             (!('totalPrice' in data) || (data.totalPrice is number && data.totalPrice >= 0)) &&
+             (!('date' in data) || (data.date is string && data.date.size() <= 50));
+    }
+
+    match /retail_sales/{saleId} {
+      allow get: if isValidId(saleId);
+      allow list: if true;
+      allow create, update: if isValidId(saleId) && isValidRetailSale(incoming());
+      allow delete: if isValidId(saleId);
+    }
+
+    // 14. System Credentials Collection (Hashed & Salted Authentication Storage)
+    match /credentials/{credentialId} {
+      allow get: if isValidId(credentialId);
+      allow list: if true;
+      allow create, update: if isValidId(credentialId);
+      allow delete: if false;
+    }
+
+    // 15. Test / Health Check Connection
+    match /test/{testId} {
+      allow read: if true;
+    }
+
+  }
+}
