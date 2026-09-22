@@ -14,23 +14,32 @@ async function generateAllIcons() {
     fs.mkdirSync(imagesDir, { recursive: true });
   }
 
-  // Pure Emerald Green with Bold White GTM text
+  // Pure Emerald Green with Bold White GTM text and BARBER SHOP underneath
   // Full bleed 512x512 solid green background
   const fullBleedSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" fill="#059669" />
-  <text x="256" y="325" text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif" font-size="185" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+  <g text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif">
+    <text x="256" y="275" font-size="155" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+    <text x="256" y="342" font-size="34" font-weight="800" letter-spacing="6" fill="#f0fdf4">BARBER SHOP</text>
+  </g>
 </svg>`;
 
   // Clean Rounded corner SVG for web display (logo.svg)
   const roundedSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="96" fill="#059669" />
-  <text x="256" y="325" text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif" font-size="185" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+  <g text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif">
+    <text x="256" y="275" font-size="155" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+    <text x="256" y="342" font-size="34" font-weight="800" letter-spacing="6" fill="#f0fdf4">BARBER SHOP</text>
+  </g>
 </svg>`;
 
   // Maskable SVG with safe-zone padding
   const maskableSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" fill="#059669" />
-  <text x="256" y="310" text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif" font-size="145" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+  <g text-anchor="middle" font-family="'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Arial Black', sans-serif">
+    <text x="256" y="265" font-size="130" font-weight="900" letter-spacing="2" fill="#ffffff">GTM</text>
+    <text x="256" y="322" font-size="28" font-weight="800" letter-spacing="5" fill="#f0fdf4">BARBER SHOP</text>
+  </g>
 </svg>`;
 
   fs.writeFileSync(path.join(publicDir, 'logo.svg'), roundedSvg);

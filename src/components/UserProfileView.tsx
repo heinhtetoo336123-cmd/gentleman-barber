@@ -22,13 +22,12 @@ import {
   CheckCircle2,
   Volume2,
   Camera,
-  Upload,
-  Crown
+  Upload
 } from 'lucide-react';
 import { Language, translations } from '../data/i18n';
 import { Designer, Service, UserRole } from '../types';
 import { api } from '../api/client';
-import { getTierConfig, TIER_CONFIGS, MemberTier, calculateTierFromPoints } from '../utils/tierStyles';
+import { getTierConfig, calculateTierFromPoints } from '../utils/tierStyles';
 import {
   getClientSession,
   saveClientSession,
@@ -558,66 +557,6 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
               <span>{profile.points} PTS</span>
             </div>
           </div>
-        </div>
-
-        {/* Benefits Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mt-5 pt-4 border-t border-emerald-200/70 text-xs">
-          {tierConfig.perks.map((perk, idx) => (
-            <div key={idx} className="p-2.5 rounded-2xl bg-white/90 border border-emerald-200/80 shadow-2xs">
-              <span className="text-[10px] text-emerald-800 block uppercase font-mono font-semibold">
-                {idx === 0 ? 'Member Perk' : idx === 1 ? 'Privilege' : 'Status'}
-              </span>
-              <span className="font-bold text-stone-900 block mt-0.5 truncate">{perk}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Member Level Progression Roadmap */}
-      <div className="bg-white border border-stone-200 rounded-3xl p-5 shadow-xs space-y-3">
-        <div className="flex items-center justify-between border-b border-stone-100 pb-2.5">
-          <div className="flex items-center space-x-2">
-            <Crown className="w-4 h-4 text-emerald-700" />
-            <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-stone-950 font-mono">
-              {lang === 'my' ? 'Member Level အဆင့်များနှင့် အကျိုးခံစားခွင့်များ' : 'Member Tier Roadmap & Privileges'}
-            </h3>
-          </div>
-          <span className="text-[11px] font-mono font-bold text-stone-500">
-            {profile.points} PTS
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          {(['Bronze', 'Silver', 'Gold', 'VIP'] as MemberTier[]).map((t) => {
-            const conf = TIER_CONFIGS[t];
-            const isCurrent = profile.memberTier === t;
-            const ptsReq = t === 'Bronze' ? '0+ PTS' : t === 'Silver' ? '500+ PTS' : t === 'Gold' ? '1,000+ PTS' : '2,000+ PTS';
-
-            return (
-              <div
-                key={t}
-                className={`p-3 rounded-2xl border transition-all ${
-                  isCurrent
-                    ? `${conf.badgeBg} ${conf.badgeBorder} ring-2 ring-emerald-500/50 shadow-xs`
-                    : 'bg-stone-50 border-stone-200 opacity-75'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-base">{conf.icon}</span>
-                  {isCurrent && (
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-emerald-700 text-white">
-                      CURRENT
-                    </span>
-                  )}
-                </div>
-                <h4 className="font-bold text-xs text-stone-900">{t}</h4>
-                <p className="text-[10px] font-mono text-stone-500">{ptsReq}</p>
-                <p className="text-[10px] text-stone-600 mt-1 line-clamp-2 leading-tight">
-                  {conf.perks[0]}
-                </p>
-              </div>
-            );
-          })}
         </div>
       </div>
 

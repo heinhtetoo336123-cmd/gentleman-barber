@@ -357,9 +357,6 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
                   <h4 className="font-bold text-sm text-stone-900 truncate group-hover:text-emerald-700 transition-colors">
                     {designer.name}
                   </h4>
-                  <p className="text-xs text-stone-500 font-medium truncate">
-                    {designer.title || 'Barber Stylist'}
-                  </p>
 
                   {/* Phone Number Display */}
                   {designer.phone && (

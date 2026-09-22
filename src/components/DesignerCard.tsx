@@ -12,7 +12,6 @@ interface DesignerCardProps {
 export const DesignerCard: React.FC<DesignerCardProps> = ({ designer, bookings, onSelectDesigner }) => {
   if (!designer) return null;
 
-  const specialtiesList = Array.isArray(designer.specialties) ? designer.specialties : [];
   const daysList = Array.isArray(designer.availableDays) ? designer.availableDays : [];
   const startHour = designer.workingHours?.start || '09:00';
   const endHour = designer.workingHours?.end || '18:00';
@@ -49,10 +48,6 @@ export const DesignerCard: React.FC<DesignerCardProps> = ({ designer, bookings, 
             </span>
           </div>
 
-          <p className="text-xs text-emerald-800 font-semibold truncate mt-0.5">
-            {designer.title || 'Barber Stylist'}
-          </p>
-
           {/* Phone Number Display */}
           {designer.phone && (
             <div className="flex items-center space-x-1.5 text-xs text-emerald-800 font-mono font-bold mt-1 bg-emerald-50/80 px-2 py-0.5 rounded-md border border-emerald-200/70 w-fit">
@@ -70,23 +65,9 @@ export const DesignerCard: React.FC<DesignerCardProps> = ({ designer, bookings, 
 
       {/* Bio excerpt */}
       {designer.bio && (
-        <p className="text-xs text-stone-600 mt-3 line-clamp-2 leading-relaxed">
+        <p className="text-xs text-stone-600 mt-2 line-clamp-2 leading-relaxed">
           {designer.bio}
         </p>
-      )}
-
-      {/* Specialties Badges */}
-      {specialtiesList.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {specialtiesList.map((spec, i) => (
-            <span
-              key={i}
-              className="text-[11px] font-medium bg-stone-100 text-stone-700 px-2.5 py-0.5 rounded-md border border-stone-200"
-            >
-              {spec}
-            </span>
-          ))}
-        </div>
       )}
 
       {/* Footer Schedule info & Action */}
