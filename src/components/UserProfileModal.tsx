@@ -322,7 +322,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="Ko Htet"
+                  placeholder={lang === 'my' ? 'သင့်အမည် (Your Name)' : 'Your Name'}
                   value={profile.name}
                   onChange={(e) => setProfile({ ...profile, name: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl bg-white border border-stone-200 text-stone-950 text-xs focus:outline-hidden focus:border-emerald-500 focus:bg-white"

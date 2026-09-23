@@ -603,7 +603,7 @@ User Action Recommendation: ${diagnosticResult.recommendedActionEnglish || 'Sync
                     <User className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder={lang === 'my' ? 'ဥပမာ ကိုအောင်' : 'e.g. Ko Aung'}
+                      placeholder={lang === 'my' ? 'သင့်အမည် (Your Name)' : 'Your Name'}
                       value={clientNameInput}
                       onChange={(e) => setClientNameInput(e.target.value)}
                       className="w-full pl-10 pr-3.5 py-3.5 rounded-xl border border-stone-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-sans text-stone-900 text-xs bg-white"

@@ -1197,7 +1197,7 @@ export const AccountControlManager: React.FC<AccountControlManagerProps> = ({
                     required
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
-                    placeholder="e.g. Min Thet / Ko Aung"
+                    placeholder="Your Name"
                     className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-stone-900 font-bold focus:outline-hidden focus:border-emerald-600"
                   />
                 </div>

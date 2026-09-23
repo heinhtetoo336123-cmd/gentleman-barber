@@ -1110,7 +1110,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     required
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="e.g. Ko Min Thu"
+                    placeholder={lang === 'my' ? 'သင့်အမည် (Your Name)' : 'Your Name'}
                     className="w-full bg-stone-50 border border-stone-200 focus:border-emerald-500 focus:bg-white rounded-xl px-3 py-2 text-xs text-stone-900 focus:outline-none transition-colors"
                   />
                 </div>

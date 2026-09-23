@@ -47,7 +47,7 @@ export const ClientCombobox: React.FC<ClientComboboxProps> = ({
   onChangePhone,
   knownClients,
   lang = 'en',
-  placeholderName = 'e.g. Ko Aung / Mg Mg',
+  placeholderName = 'Your Name',
   placeholderPhone = '09...',
   requiredName = true,
   idPrefix = 'walkin'

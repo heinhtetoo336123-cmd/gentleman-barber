@@ -750,7 +750,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
               <input
                 type="text"
                 required
-                placeholder="e.g. Ko Htet"
+                placeholder={lang === 'my' ? 'သင့်အမည် (Your Name)' : 'Your Name'}
                 value={profile.name}
                 onChange={(e) => setProfile({ ...profile, name: e.target.value })}
                 className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3.5 py-2.5 text-xs text-stone-950 focus:outline-hidden focus:border-emerald-600 focus:bg-white"
