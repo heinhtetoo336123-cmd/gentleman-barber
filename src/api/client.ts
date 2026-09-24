@@ -253,13 +253,8 @@ const MOCK_SAMPLE_SERVICE_IDS = new Set([
 
 let hasPurgedMockServices = false;
 function purgeMockServicesFromFirestore() {
-  if (hasPurgedMockServices) return;
-  hasPurgedMockServices = true;
-  MOCK_SAMPLE_SERVICE_IDS.forEach(async (id) => {
-    try {
-      await deleteDoc(doc(db, 'services', id));
-    } catch (_) {}
-  });
+  // Disabled unconditional auto-delete loop on every startup to prevent unnecessary Firestore write operations.
+  // Mock IDs are already filtered out via MOCK_SAMPLE_SERVICE_IDS in all queries.
 }
 
 export const api = {
@@ -1316,6 +1311,7 @@ export const api = {
       notifTitle = `💈 ဝန်ဆောင်မှု စတင်နေပါပြီ (${target?.bookingCode || id})`;
       notifMsg = `Booking (${target?.bookingCode || id}) - ဆံသပညာရှင် ${target?.designerName || ''} နှင့်အတူ စတင်ဆောင်ရွက်နေပါပြီ။`;
     } else if (status === 'completed') {
+      notifType = 'completion';
       notifTitle = `🎉 ဝန်ဆောင်မှု ပြီးမြောက်ပါပြီ (${target?.bookingCode || id})`;
       notifMsg = `Booking (${target?.bookingCode || id}) ဝန်ဆောင်မှု အောင်မြင်စွာ ပြီးဆုံးပါပြီ။ GENTLEMAN BARBER SHOP ကို အားပေးမှုအတွက် ကျေးဇူးတင်ရှိပါသည်။ Noti ကို နှိပ်၍ 5-Star Rating ပေးပြီး +50 Royalty Points ရယူပါ!`;
     } else {
@@ -1379,6 +1375,26 @@ export const api = {
         customerPhone: target.customerPhone,
       };
       notifsToSave.push(barberNotif);
+    }
+
+    // For Walk-ins: If marked completed, send an Admin notification so Admin can rate the barber directly
+    if (status === 'completed' && (target?.isWalkin || (target?.notes && target.notes.includes('Walk-in')))) {
+      const adminWalkinNotifId = `notif-admin-wlk-done-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const adminWalkinNotif: NotificationItem = {
+        id: adminWalkinNotifId,
+        title: `💈 Walk-in ဝန်ဆောင်မှု ပြီးမြောက်ပါပြီ (${target?.bookingCode || id})`,
+        message: `${target?.customerName || 'Walk-in ဧည့်သည်'} ၏ "${target?.serviceName || 'ဝန်ဆောင်မှု'}" (${target?.designerName || 'Stylist'}) ပြီးဆုံးပါပြီ။ Noti ကို နှိပ်၍ Barber Rating ပေးနိုင်ပါသည်။`,
+        timestamp: now,
+        read: false,
+        type: 'completion',
+        bookingId: id,
+        forRole: 'admin',
+        designerId: target?.designerId,
+        designerName: target?.designerName,
+        customerName: target?.customerName,
+        customerPhone: target?.customerPhone,
+      };
+      notifsToSave.push(adminWalkinNotif);
     }
 
     try {
@@ -1517,6 +1533,10 @@ export const api = {
 
     if (!target) {
       throw new Error('ရက်ချိန်း ဘိုကင်နံပါတ် ရှာမတွေ့ပါ။ နံပါတ် မှန်ကန်မှု ရှိမရှိ စစ်ဆေးပေးပါ');
+    }
+
+    if (target.rating && target.rating > 0) {
+      throw new Error('ဤ Booking အတွက် Rating ပေးပြီးဖြစ်ပါသည် (Booking တစ်ခုလျှင် တစ်ကြိမ်သာ ပေးခွင့်ရှိပါသည်)');
     }
 
     const safeRating = Math.min(5, Math.max(1, Number(rating) || 5));
@@ -2957,8 +2977,8 @@ export const api = {
       pendingRequests: bookings.filter(b => b.status === 'pending').length,
       todayBookings: bookings.filter(b => b.date === todayStr).length,
       estimatedRevenue: bookings
-        .filter(b => b.status === 'confirmed' || b.status === 'completed' || b.status === 'in-progress')
-        .reduce((sum, b) => sum + (b.servicePrice || 15000), 0),
+        .filter(b => b.status === 'completed')
+        .reduce((sum, b) => sum + Math.max(0, (b.servicePrice || 0) - (b.discountAmount || 0)), 0),
       activeServicesCount: services.filter(s => s.active).length,
       activeDesignersCount: designers.length
     };

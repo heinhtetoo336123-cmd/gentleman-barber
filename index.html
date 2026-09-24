@@ -27,19 +27,14 @@
     <meta name="apple-mobile-web-app-title" content="GENTLEMAN" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="HandheldFriendly" content="true" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700;800&family=Padauk:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700;800&family=Padauk:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700;800&family=Padauk:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'" />
+    <noscript>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700;800&family=Padauk:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+    </noscript>
     <script>
-      // Domain Canonical Forwarder: Redirect old shared AI Studio / Preview URLs to the official custom domain
-      try {
-        var h = window.location.hostname;
-        var isDevEditor = h.includes('ais-dev-') || h === 'localhost' || h === '127.0.0.1';
-        if (!isDevEditor && (h.includes('babashop-booking-sys.ai.studio') || h.includes('ais-pre-') || (h.includes('.ai.studio') && !h.includes('ais-dev-')))) {
-          window.location.replace('https://gentlemanbarbershopmyeikbooking.com' + window.location.pathname + window.location.search + window.location.hash);
-        }
-      } catch (e) {}
-
       // Clean up legacy cached round logos from localStorage so new GTM icon is always used
       try {
         const savedLogo = localStorage.getItem('gentleman_shop_logo');

@@ -892,7 +892,7 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
         );
 
         const completedBookings = clientBookings.filter(
-          (b) => b.status === 'completed' || b.status === 'confirmed'
+          (b) => b.status === 'completed'
         );
 
         const totalSpent = completedBookings.reduce(

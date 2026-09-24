@@ -117,6 +117,7 @@ export interface Booking {
 export type NotificationType =
   | 'new_booking'
   | 'status_change'
+  | 'completion'
   | 'cancellation'
   | 'reschedule'
   | 'broadcast'

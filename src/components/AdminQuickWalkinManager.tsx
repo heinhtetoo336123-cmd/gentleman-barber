@@ -391,7 +391,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     let stylistRevenueMap: Record<string, { name: string; count: number; revenue: number; commission: number }> = {};
 
     for (const b of allWalkinBookings) {
-      if (b.status === 'cancelled') continue;
+      if (b.status !== 'completed') continue;
       const price = b.servicePrice || 0;
       const discount = b.discountAmount || 0;
       const net = Math.max(0, price - discount);

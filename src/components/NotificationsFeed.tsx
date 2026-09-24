@@ -31,6 +31,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { AdminBroadcastModal } from './AdminBroadcastModal';
 import { AutoDeleteCountdownBadge } from './AutoDeleteCountdownBadge';
+import { BarberRatingModal } from './BarberRatingModal';
 
 interface NotificationsFeedProps {
   notifications: NotificationItem[];
@@ -238,7 +239,6 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
     }
 
     playNotificationChime();
-    setSelectedNotif(item);
     if (!item.read) {
       try {
         await api.markNotificationsRead(role, [item.id]);
@@ -246,11 +246,58 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
         item.readAt = new Date().toISOString();
       } catch {}
     }
+
+    const related = findRelatedBooking(item.bookingId);
+
+    // Helper to verify that the notification itself is strictly a service completion notification
+    const isCompletionNotificationItem = (n: NotificationItem): boolean => {
+      if (
+        n.type === 'new_booking' ||
+        n.type === 'cancellation' ||
+        n.type === 'reschedule' ||
+        n.title.includes('တင်ပြီးပါပြီ') ||
+        n.title.includes('Booking အသစ်') ||
+        n.title.includes('အတည်ပြု') ||
+        n.title.includes('ပယ်ဖျက်') ||
+        n.title.includes('စတင်နေပါပြီ')
+      ) {
+        return false;
+      }
+      return (
+        n.type === 'completion' ||
+        n.title.includes('ပြီးမြောက်') ||
+        n.title.includes('Completed') ||
+        n.message.includes('ပြီးဆုံးပါပြီ')
+      );
+    };
+
+    // Case 1: CLIENT SIDE (Online Booking Completion Notification ONLY)
+    // "BARBER RATING က BOOKING ဆိုရင် CLIENT SIDE ကို COMPLETE NOTIFICATION ချတော့မှ NOTIFICATION ကိုနှိပ်ပြီး လုပ်လို့ရအောင်လုပ်ပေးပါ"
+    // "BOOKING တင်ပြီးပါပြီ NOTIFICATION မှာ RATING ပေးလို့မရဘူးနော် ပါနေသေးတယ်။ COMPLETED တစ်ခုထဲမှာပဲပေးလို့ရရမှာ"
+    if (role === 'user' && related && isCompletionNotificationItem(item)) {
+      handleOpenRatingFromNotif(related, 5);
+      return;
+    }
+
+    // Case 2: ADMIN SIDE (Walk-in Notification)
+    // "WALK-IN ဆိုလျင် ADMIN SIDE က NOTIFICATION မှာ နှိပ်ပြီးလုပ်လို့ရအောင်လုပ်ပေးပါ တစ်ကြိမ်သာ ပေးလုပ်ပါ။"
+    const isWalkinNotif =
+      (related && (related.isWalkin || (related.notes && related.notes.includes('Walk-in')))) ||
+      item.title.includes('Walk-in') ||
+      item.message.includes('Walk-in') ||
+      item.id.includes('wlk');
+
+    if ((role === 'admin' || role === 'superadmin') && related && isWalkinNotif) {
+      handleOpenRatingFromNotif(related, 5);
+      return;
+    }
+
+    setSelectedNotif(item);
   };
 
   const findRelatedBooking = (relatedId?: string): Booking | undefined => {
     if (!relatedId) return undefined;
-    return bookings.find((b) => b.id === relatedId || b.bookingCode === relatedId);
+    return bookings?.find((b) => b.id === relatedId || b.bookingCode === relatedId);
   };
 
   const handleDeleteSingleNotification = async (e: React.MouseEvent | null, id: string) => {
@@ -501,16 +548,56 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
                       {item.message}
                     </p>
 
-                    {/* Rating trigger for completed booking */}
-                    {relatedBooking && (relatedBooking.status === 'completed' || item.title.includes('ပြီးစီး')) && !relatedBooking.rating && (
-                      <div className="pt-1">
-                        <button
-                          onClick={(e) => handleOpenRatingFromNotif(relatedBooking, 5, e)}
-                          className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold rounded-md flex items-center space-x-1 cursor-pointer transition-all active:scale-95"
-                        >
-                          <Star className="w-2.5 h-2.5 fill-white" />
-                          <span>Rating</span>
-                        </button>
+                    {/* Rating Triggers and Badges:
+                        1. Online Booking (Client Side): ONLY on actual Completed notification. "Booking တင်ပြီးပါပြီ" and others are strictly blocked.
+                        2. Walk-in (Admin Side): on Walk-in notif.
+                    */}
+                    {relatedBooking && (
+                      <div className="pt-1 flex items-center space-x-2 flex-wrap gap-y-1">
+                        {/* Client Side for Completed Booking ONLY */}
+                        {role === 'user' &&
+                          !item.type?.includes('new_booking') &&
+                          !item.title.includes('တင်ပြီးပါပြီ') &&
+                          !item.title.includes('Booking အသစ်') &&
+                          !item.title.includes('အတည်ပြု') &&
+                          !item.title.includes('ပယ်ဖျက်') &&
+                          !item.title.includes('စတင်နေပါပြီ') &&
+                          (item.type === 'completion' || item.title.includes('ပြီးမြောက်') || item.title.includes('Completed') || item.message.includes('ပြီးဆုံးပါပြီ')) && (
+                          relatedBooking.rating ? (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold rounded-md font-mono">
+                              <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-500" />
+                              <span>Rated {relatedBooking.rating}/5 (ပြီးပါပြီ)</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenRatingFromNotif(relatedBooking, 5, e)}
+                              className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-xs"
+                            >
+                              <Star className="w-2.5 h-2.5 fill-white text-white" />
+                              <span>{lang === 'my' ? 'Barber Rating ပေးမည်' : 'Rate Barber'}</span>
+                            </button>
+                          )
+                        )}
+
+                        {/* Admin Side for Walk-in Booking */}
+                        {(role === 'admin' || role === 'superadmin') && (relatedBooking.isWalkin || item.title.includes('Walk-in') || item.id.includes('wlk')) && (
+                          relatedBooking.rating ? (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold rounded-md font-mono">
+                              <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-500" />
+                              <span>Rated {relatedBooking.rating}/5 (ပြီးပါပြီ)</span>
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => handleOpenRatingFromNotif(relatedBooking, 5, e)}
+                              className="px-2.5 py-1 bg-emerald-800 hover:bg-emerald-900 text-white text-[10px] font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-all active:scale-95 shadow-xs"
+                            >
+                              <Star className="w-2.5 h-2.5 fill-white text-white" />
+                              <span>{lang === 'my' ? 'Barber Rating ပေးမည် (Walk-in)' : 'Rate Walk-in Barber'}</span>
+                            </button>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
@@ -645,6 +732,25 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
           }}
         />
       )}
+
+      {/* Barber Rating Modal (One-Time Rating Enforced) */}
+      <BarberRatingModal
+        isOpen={Boolean(ratingBooking)}
+        booking={ratingBooking}
+        role={role}
+        lang={lang}
+        onClose={() => setRatingBooking(null)}
+        onSuccess={(_ratedBooking, rating) => {
+          setRatingBooking(null);
+          setRatingToast(
+            lang === 'my'
+              ? `ကျေးဇူးတင်ပါသည်! Rating ${rating}⭐️ ပေးပြီးပါပြီ (တစ်ကြိမ်သာ ပေးခွင့်ရှိပါသည်)`
+              : `Rating ${rating}⭐️ submitted successfully (one-time only)!`
+          );
+          if (onRefreshAll) onRefreshAll();
+          setTimeout(() => setRatingToast(null), 4000);
+        }}
+      />
     </div>
   );
 };

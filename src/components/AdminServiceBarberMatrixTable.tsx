@@ -114,6 +114,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     for (const b of filteredBookings) {
       const dId = b.designerId;
       if (!dId) continue;
+      const isCompleted = b.status === 'completed';
 
       if (b.servicesList && b.servicesList.length > 0) {
         // Multi-service booking calculation
@@ -128,7 +129,9 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
           const existing = map.get(key) || { count: 0, revenue: 0 };
           existing.count += 1;
-          existing.revenue += Math.round(itemNet);
+          if (isCompleted) {
+            existing.revenue += Math.round(itemNet);
+          }
           map.set(key, existing);
         }
       } else {
@@ -142,7 +145,9 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
         const existing = map.get(key) || { count: 0, revenue: 0 };
         existing.count += 1;
-        existing.revenue += net;
+        if (isCompleted) {
+          existing.revenue += net;
+        }
         map.set(key, existing);
       }
     }
@@ -150,7 +155,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     return map;
   }, [filteredBookings]);
 
-  // Channel breakdown metrics (Walk-in vs Online Booking)
+  // Channel breakdown metrics (Walk-in vs Online Booking - strictly completed bookings count revenue)
   const channelBreakdown = useMemo(() => {
     let walkinCount = 0;
     let onlineCount = 0;
@@ -160,12 +165,13 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     filteredBookings.forEach((b) => {
       const isWlk = b.isWalkin === true || b.bookingCode.startsWith('WLK-') || (b.notes && b.notes.toLowerCase().includes('walk-in'));
       const net = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
+      const isCompleted = b.status === 'completed';
       if (isWlk) {
         walkinCount += 1;
-        walkinRevenue += net;
+        if (isCompleted) walkinRevenue += net;
       } else {
         onlineCount += 1;
-        onlineRevenue += net;
+        if (isCompleted) onlineRevenue += net;
       }
     });
 
@@ -336,15 +342,16 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     });
   }, [allRetailSales, startDate, endDate]);
 
-  // Comprehensive Drawer Financial Settlement
+  // Comprehensive Drawer Financial Settlement (Strictly completed services count toward drawer revenue)
   const drawerFinancials = useMemo(() => {
-    // 1. Services Revenue (Cash + Digital)
+    // 1. Services Revenue (Cash + Digital) - ONLY COMPLETED BOOKINGS
     let servicesCash = 0;
     let servicesDigital = 0;
     let servicesTotal = 0;
-    let servicesCount = filteredBookings.length;
+    let servicesCount = filteredBookings.filter(b => b.status === 'completed').length;
 
     filteredBookings.forEach((b) => {
+      if (b.status !== 'completed') return;
       const net = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
       servicesTotal += net;
 
@@ -441,7 +448,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     });
   }, [filteredBookings, selectedStylistFilter, stylistChannelFilter, stylistSearchQuery]);
 
-  // Stylist Detailed Summary Totals
+  // Stylist Detailed Summary Totals (Only completed services count toward total service value and commission)
   const stylistDetailedTotals = useMemo(() => {
     let totalAppointments = stylistDetailedBookings.length;
     let walkinCount = 0;
@@ -450,18 +457,21 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     let totalCommission = 0;
 
     stylistDetailedBookings.forEach((b) => {
+      const isCompleted = b.status === 'completed';
       const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
-      totalServiceValue += finalPrice;
 
       if (b.isWalkin) walkinCount += 1;
       else bookingCount += 1;
 
-      const des = designers.find((d) => d.id === b.designerId);
-      const commRate = des?.commissionPercent ?? 50;
-      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount > 0
-        ? b.commissionAmount
-        : Math.round((finalPrice * commRate) / 100);
-      totalCommission += comm;
+      if (isCompleted) {
+        totalServiceValue += finalPrice;
+        const des = designers.find((d) => d.id === b.designerId);
+        const commRate = des?.commissionPercent ?? 50;
+        const comm = typeof b.commissionAmount === 'number' && b.commissionAmount > 0
+          ? b.commissionAmount
+          : Math.round((finalPrice * commRate) / 100);
+        totalCommission += comm;
+      }
     });
 
     return { totalAppointments, walkinCount, bookingCount, totalServiceValue, totalCommission };

@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { formatPrice } from '../utils/formatters';
 import { playNotificationChime, playSuccessChime } from '../utils/audio';
 import { getClientBookings, normalizePhoneNumber } from '../utils/notifications';
+import { BarberRatingModal } from './BarberRatingModal';
 import {
   Calendar,
   Clock,
@@ -151,27 +152,18 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
   };
 
   const handleOpenRating = (booking: Booking) => {
-    setRatingBooking(booking);
-    setSelectedRating(booking.rating || 5);
-    setReviewNote(booking.reviewNote || '');
-    playNotificationChime();
-  };
-
-  const handleSubmitRating = async () => {
-    if (!ratingBooking) return;
-    setIsSubmittingRating(true);
-    try {
-      await api.rateBooking(ratingBooking.id, selectedRating, reviewNote.trim() || undefined);
-      playSuccessChime();
-      showToast(`Rating ${selectedRating}⭐️ ပေးပြီး +50 Points ရရှိပါသည်!`);
-      setRatingBooking(null);
-      onRefresh();
-    } catch (e) {
-      console.error(e);
-      showToast('Rating ပေးရာတွင် အမှားဖြစ်ပေါ်ပါသည်');
-    } finally {
-      setIsSubmittingRating(false);
+    if (booking.status !== 'completed') {
+      showToast('ဝန်ဆောင်မှု ပြီးမြောက်ပြီးမှသာ Barber Rating ပေးနိုင်ပါမည်');
+      return;
     }
+    if (booking.rating && booking.rating > 0) {
+      showToast(`ဤ Booking (${booking.bookingCode || booking.id.slice(0, 8)}) အတွက် Rating ${booking.rating}⭐️ ပေးပြီးဖြစ်ပါသည် (တစ်ကြိမ်သာ ပေးခွင့်ရှိပါသည်)`);
+      return;
+    }
+    setRatingBooking(booking);
+    setSelectedRating(5);
+    setReviewNote('');
+    playNotificationChime();
   };
 
   const handleReschedule = async () => {
@@ -205,6 +197,14 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
     );
 
     if (found) {
+      if (found.status !== 'completed') {
+        showToast(`Booking (${found.bookingCode || found.id.slice(0, 8)}) မှာ ဝန်ဆောင်မှု မပြီးဆုံးသေးပါ (Status: ${found.status})`);
+        return;
+      }
+      if (found.rating && found.rating > 0) {
+        showToast(`Booking (${found.bookingCode || found.id.slice(0, 8)}) အတွက် Rating ${found.rating}⭐️ ပေးပြီးဖြစ်ပါသည် (တစ်ကြိမ်သာ ပေးခွင့်ရှိပါသည်)`);
+        return;
+      }
       handleOpenRating(found);
       setSearchCode('');
     } else {
@@ -500,6 +500,25 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
                       </>
                     )}
 
+                    {/* Rate Barber Action Button for Completed Booking */}
+                    {b.status === 'completed' && (
+                      b.rating ? (
+                        <span className="inline-flex items-center space-x-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold rounded-md font-mono">
+                          <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-500" />
+                          <span>Rated {b.rating}/5 (ပြီးပါပြီ)</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenRating(b)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] cursor-pointer font-bold flex items-center space-x-1 shadow-xs active:scale-95 transition-all"
+                        >
+                          <Star className="w-2.5 h-2.5 fill-white text-white" />
+                          <span>Rate Barber (+50 pts)</span>
+                        </button>
+                      )
+                    )}
+
                     {hasDetails && (
                       <button
                         type="button"
@@ -522,14 +541,11 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
                       </p>
                     )}
                     {b.rating && (
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span>⭐️ {b.rating}/5 {b.reviewNote ? `("${b.reviewNote}")` : ''}</span>
-                        <button
-                          onClick={() => handleOpenRating(b)}
-                          className="text-emerald-700 font-bold underline"
-                        >
-                          Update Rating
-                        </button>
+                      <div className="flex items-center space-x-1.5 text-[11px] text-stone-700">
+                        <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                        <span className="font-bold">Rating: {b.rating}/5</span>
+                        {b.reviewNote && <span className="italic">("{b.reviewNote}")</span>}
+                        <span className="text-[10px] text-stone-400">(သတ်မှတ်ပြီး)</span>
                       </div>
                     )}
                   </div>
@@ -540,74 +556,19 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
         </div>
       )}
 
-      {/* 5-Star Rating Modal */}
-      {ratingBooking && (
-        <div className="fixed inset-0 z-50 bg-stone-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-emerald-100 rounded-3xl p-5 w-full max-w-sm space-y-3 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-emerald-100 pb-2.5">
-              <div className="flex items-center space-x-2">
-                <Star className="w-4 h-4 fill-emerald-600 text-emerald-600" />
-                <h3 className="text-sm font-bold text-stone-900">Rate Service (+50 Points)</h3>
-              </div>
-              <button
-                onClick={() => setRatingBooking(null)}
-                className="text-stone-400 hover:text-stone-700"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-stone-600">
-              {ratingBooking.serviceName} with <span className="font-bold text-stone-900">{ratingBooking.designerName}</span>
-            </p>
-
-            <div className="flex justify-center space-x-2 py-2">
-              {[1, 2, 3, 4, 5].map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSelectedRating(s)}
-                  className="p-1.5 cursor-pointer transform hover:scale-110 transition-transform"
-                >
-                  <Star
-                    className={`w-7 h-7 ${
-                      s <= selectedRating
-                        ? 'fill-emerald-600 text-emerald-600'
-                        : 'text-stone-300'
-                    }`}
-                  />
-                </button>
-              ))}
-            </div>
-
-            <textarea
-              rows={2}
-              value={reviewNote}
-              onChange={(e) => setReviewNote(e.target.value)}
-              placeholder="Leave a short comment (optional)..."
-              className="w-full bg-stone-50 border border-emerald-100 rounded-xl p-2.5 text-xs text-stone-900 focus:outline-none focus:border-emerald-600"
-            />
-
-            <div className="flex space-x-2 pt-1">
-              <button
-                type="button"
-                onClick={() => setRatingBooking(null)}
-                className="flex-1 py-2 bg-stone-100 text-stone-700 text-xs font-bold rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isSubmittingRating}
-                onClick={handleSubmitRating}
-                className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-xl disabled:opacity-50"
-              >
-                {isSubmittingRating ? 'Saving...' : 'Submit Rating'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Barber Rating Modal (One-Time Rating Enforced) */}
+      <BarberRatingModal
+        isOpen={Boolean(ratingBooking)}
+        booking={ratingBooking}
+        role="user"
+        lang="my"
+        onClose={() => setRatingBooking(null)}
+        onSuccess={(_bk, rating) => {
+          setRatingBooking(null);
+          showToast(`ကျေးဇူးတင်ပါသည်! Rating ${rating}⭐️ ပေးပြီး +50 Points ရရှိပါသည်! (တစ်ကြိမ်သာ ပေးခွင့်ရှိပါသည်)`);
+          onRefresh();
+        }}
+      />
 
       {/* Reschedule Modal */}
       {reschedulingBooking && (

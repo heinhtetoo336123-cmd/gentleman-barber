@@ -57,7 +57,7 @@ export const ClientDeleteFinancialModal: React.FC<ClientDeleteFinancialModalProp
   });
 
   const completedBookings = clientBookings.filter(
-    (b) => b.status === 'completed' || b.status === 'confirmed'
+    (b) => b.status === 'completed'
   );
 
   const pendingBookings = clientBookings.filter(

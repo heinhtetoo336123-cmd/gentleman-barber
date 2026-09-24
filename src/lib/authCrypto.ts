@@ -293,6 +293,8 @@ let activeCredentialState: CloudCredentialPayload = {
   updatedBy: 'System',
 };
 
+let hasAttemptedCloudBootstrap = false;
+
 // Initialize Cloud Firestore Credentials synchronization
 export function initCredentialsSync() {
   try {
@@ -341,8 +343,9 @@ export function initCredentialsSync() {
             })
           );
         } catch {}
-      } else {
-        // First-time bootstrap: write default hashes to Cloud DB
+      } else if (!hasAttemptedCloudBootstrap) {
+        // First-time bootstrap: write default hashes to Cloud DB exactly once
+        hasAttemptedCloudBootstrap = true;
         setDoc(credsDocRef, activeCredentialState).catch(() => {});
       }
     }, () => {});

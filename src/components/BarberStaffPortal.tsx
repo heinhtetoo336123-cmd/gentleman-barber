@@ -242,7 +242,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
       });
   }, [barberBookings, timelinePeriodMode, selectedDate, timelineStartDate, timelineEndDate, timelineChannelFilter]);
 
-  // Dynamic Timeline Statistics for Selected Period (Walk-in, Booking, Total Service Value, Commission)
+  // Dynamic Timeline Statistics for Selected Period (Only COMPLETED bookings count toward revenue and commission)
   const timelineStats = useMemo(() => {
     let walkinCount = 0;
     let walkinRevenue = 0;
@@ -252,19 +252,28 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
     let totalCommission = 0;
 
     timelineFilteredBookings.forEach((b) => {
+      const isCompleted = b.status === 'completed';
       const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
-      totalServiceValue += finalPrice;
-      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount > 0
-        ? b.commissionAmount
-        : Math.round((finalPrice * commissionRate) / 100);
-      totalCommission += comm;
 
       if (b.isWalkin) {
         walkinCount += 1;
-        walkinRevenue += finalPrice;
+        if (isCompleted) {
+          walkinRevenue += finalPrice;
+        }
       } else {
         bookingCount += 1;
-        bookingRevenue += finalPrice;
+        if (isCompleted) {
+          bookingRevenue += finalPrice;
+        }
+      }
+
+      // STRICT FINANCIAL RULE: Financials (Revenue, Service Value, Commission) ONLY accumulate when COMPLETED
+      if (isCompleted) {
+        totalServiceValue += finalPrice;
+        const comm = typeof b.commissionAmount === 'number' && b.commissionAmount > 0
+          ? b.commissionAmount
+          : Math.round((finalPrice * commissionRate) / 100);
+        totalCommission += comm;
       }
     });
 
@@ -843,7 +852,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                   {formatPrice(timelineStats.bookingRevenue)}
                 </div>
                 <p className="text-[10px] text-stone-400 font-mono">
-                  {lang === 'my' ? 'အွန်လိုင်းမှ ကြိုတင်ဘိုကင်' : 'Pre-booked clients'}
+                  {lang === 'my' ? 'ပြီးမြောက်ပြီး ကြိုတင်ဘိုကင်များ' : 'Completed bookings only'}
                 </p>
               </div>
 
@@ -852,7 +861,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                 <div className="flex items-center justify-between text-stone-500 text-xs font-mono font-bold">
                   <span className="flex items-center space-x-1">
                     <Scissors className="w-3.5 h-3.5 text-stone-600 inline" />
-                    <span>{lang === 'my' ? 'စုစုပေါင်း တန်ဖိုး' : 'Total Value'}</span>
+                    <span>{lang === 'my' ? 'ပြီးစီး တန်ဖိုး' : 'Completed Value'}</span>
                   </span>
                   <span className="text-[10px] bg-stone-100 text-stone-800 px-2 py-0.5 rounded-full border border-stone-200">
                     {timelineStats.totalCount} {lang === 'my' ? 'ခု' : 'total'}
@@ -862,7 +871,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                   {formatPrice(timelineStats.totalServiceValue)}
                 </div>
                 <p className="text-[10px] text-stone-400 font-mono">
-                  {lang === 'my' ? 'ဝန်ဆောင်မှု အားလုံး စုစုပေါင်း' : 'Gross service volume'}
+                  {lang === 'my' ? 'ပြီးမြောက်ပြီး ဝန်ဆောင်မှု စုစုပေါင်း' : 'Completed services total'}
                 </p>
               </div>
 
@@ -871,7 +880,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                 <div className="flex items-center justify-between text-emerald-300 text-xs font-mono font-bold">
                   <span className="flex items-center space-x-1">
                     <Award className="w-3.5 h-3.5 text-emerald-400 inline" />
-                    <span>{lang === 'my' ? 'ရရှိမည့် ကော်မရှင်' : 'Commission'}</span>
+                    <span>{lang === 'my' ? 'ရရှိပြီး ကော်မရှင်' : 'Earned Commission'}</span>
                   </span>
                   <span className="text-[10px] bg-emerald-800 text-emerald-100 px-2 py-0.5 rounded-full">
                     {commissionRate}%
@@ -881,7 +890,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                   {formatPrice(timelineStats.totalCommission)}
                 </div>
                 <p className="text-[10px] text-emerald-400 font-mono">
-                  {lang === 'my' ? 'မိမိရရှိမည့် ကော်မရှင် ခွဲဝေမှု' : 'My personal commission'}
+                  {lang === 'my' ? 'ပြီးမြောက်ပြီးမှ ရရှိသော ကော်မရှင်' : 'Earned from completed jobs'}
                 </p>
               </div>
             </div>

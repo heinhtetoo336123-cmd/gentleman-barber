@@ -158,10 +158,10 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
     bookings.forEach((b) => {
       if (b.designerId && stats[b.designerId]) {
         const isToday = b.date === todayStr;
-        const isFinished = b.status === 'completed' || b.status === 'confirmed';
+        const isFinished = b.status === 'completed';
         if (isToday && isFinished) {
           stats[b.designerId].completedToday += 1;
-          const price = b.servicePrice || 0;
+          const price = Math.max(0, (b.servicePrice || 0) - (b.discountAmount || 0));
           stats[b.designerId].revenueToday += price;
           const commRate = (designers.find((d) => d.id === b.designerId)?.commissionPercent ?? 50) / 100;
           stats[b.designerId].commissionToday += price * commRate;

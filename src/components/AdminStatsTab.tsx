@@ -51,7 +51,7 @@ export const AdminStatsTab: React.FC<AdminStatsTabProps> = ({
 
   // Revenue calculation strictly for completed bookings
   const completedBookings = bookings.filter((b) => b.status === 'completed');
-  const totalRevenue = completedBookings.reduce((sum, b) => sum + b.servicePrice, 0);
+  const totalRevenue = completedBookings.reduce((sum, b) => sum + Math.max(0, b.servicePrice - (b.discountAmount || 0)), 0);
 
   const completedCount = completedBookings.length;
   const confirmedCount = bookings.filter((b) => b.status === 'confirmed').length;

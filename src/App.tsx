@@ -171,10 +171,10 @@ export default function App() {
       setShopSettings(updatedSettings);
     });
 
-    // Auto-purge read notifications that have exceeded 5 minutes
+    // Periodic maintenance for expired read notifications (every 5 minutes instead of aggressive interval)
     const purgeInterval = setInterval(() => {
       api.purgeExpiredReadNotifications().catch(() => {});
-    }, 5000);
+    }, 5 * 60 * 1000);
 
     return () => {
       window.removeEventListener('click', handleUserInteraction);

@@ -25,21 +25,21 @@ const dbId = firebaseConfigJson.firestoreDatabaseId || undefined;
 let db: any;
 
 try {
-  // Initialize Firestore with multi-tab persistent cache & auto-detect long polling fallback
+  // Initialize Firestore with multi-tab persistent cache & forced long polling for Myanmar ISP bypass (No VPN required)
   db = initializeFirestore(app, {
     localCache: persistentLocalCache({
       tabManager: persistentMultipleTabManager()
     }),
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
     ignoreUndefinedProperties: true
   }, dbId);
 } catch (persistErr: any) {
   console.warn('Firestore persistent cache initialization warning:', persistErr);
   try {
-    // Fallback: Use memory local cache (prevents QuotaExceededError or multi-tab locks in iOS standalone PWAs)
+    // Fallback: Use memory local cache with forced long polling
     db = initializeFirestore(app, {
       localCache: memoryLocalCache(),
-      experimentalAutoDetectLongPolling: true,
+      experimentalForceLongPolling: true,
       ignoreUndefinedProperties: true
     }, dbId);
   } catch (memErr) {
