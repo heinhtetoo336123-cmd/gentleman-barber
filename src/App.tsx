@@ -145,6 +145,15 @@ export default function App() {
     window.addEventListener('click', handleUserInteraction);
     window.addEventListener('touchstart', handleUserInteraction);
 
+    // Purge stale local cache from installed apps to guarantee immediate 267 bookings full sync
+    try {
+      const storedVersion = localStorage.getItem('baba_app_version');
+      if (storedVersion !== 'v3.5.0') {
+        localStorage.removeItem('baba_bookings');
+        localStorage.setItem('baba_app_version', 'v3.5.0');
+      }
+    } catch {}
+
     // Subscribe to real-time updates for Bookings, Notifications, Designers, Services, Clients, and Settings
     const unsubServices = api.subscribeToServices((updatedServices) => {
       setServices(updatedServices);

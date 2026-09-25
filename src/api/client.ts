@@ -189,23 +189,19 @@ export function notifyLocalSubscribers(type: SyncDataType, data: any) {
 }
 
 function setLocalData<T>(key: string, value: T) {
-  // Always update in-memory cache first with complete objects
+  // Always update in-memory cache first with complete full list
   memoryStorageCache.set(key, value);
 
-  // For LocalStorage: preserve complete objects (up to 60 items) with safe quota handling
+  // For LocalStorage: preserve complete dataset with safe quota handling
   try {
-    if (Array.isArray(value)) {
-      const safeItems = value.slice(0, 60);
-      localStorage.setItem(key, JSON.stringify(safeItems));
-    } else {
-      localStorage.setItem(key, JSON.stringify(value));
-    }
+    localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
-    // Storage quota reached: purge bloated auxiliary keys safely without throwing
+    // Storage quota reached: purge bloated auxiliary keys safely
     try {
       localStorage.removeItem(LOCAL_LOGS_KEY);
       localStorage.removeItem(LOCAL_EXPENSES_KEY);
       localStorage.removeItem(LOCAL_RETAIL_SALES_KEY);
+      localStorage.setItem(key, JSON.stringify(value));
     } catch {}
   }
 }
@@ -941,8 +937,7 @@ export const api = {
       try {
         const q = query(
           collection(db, 'bookings'),
-          where('designerId', '==', designerId),
-          limit(150)
+          where('designerId', '==', designerId)
         );
         unsubscribeFirestore = onSnapshot(
           q,
