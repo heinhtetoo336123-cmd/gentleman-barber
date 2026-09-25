@@ -149,57 +149,39 @@ export function isRatingWithin12Hours(booking: {
 }
 
 /**
- * Sorts bookings with priority:
- * 1. Bookings that have not yet been confirmed or completed (pending, held) at the very top.
- * 2. Bookings that are confirmed or in-progress (not yet completed) next.
- * 3. Finalized bookings (completed, cancelled) underneath.
- * Within each priority group, bookings are ordered most recent first (createdAt descending, date/timeSlot descending).
+ * Sorts bookings with primary focus on appointment date (latest / today / future dates first):
+ * 1. Appointment Date (YYYY-MM-DD) descending (Today and upcoming dates first).
+ * 2. Time Slot descending (later time slots of the day first).
+ * 3. Created/Updated timestamps descending.
  */
-export function sortBookingsMostRecentFirst<T extends { createdAt?: string; date?: string; timeSlot?: string; status?: string }>(
+export function sortBookingsMostRecentFirst<T extends { createdAt?: string; updatedAt?: string; date?: string; timeSlot?: string; status?: string }>(
   bookings: T[]
 ): T[] {
   if (!bookings || !Array.isArray(bookings)) return [];
 
-  const getStatusPriority = (status?: string): number => {
-    if (!status) return 0;
-    const s = status.toLowerCase();
-    if (s === 'pending' || s === 'held') return 0; // Unconfirmed / Uncompleted (topmost)
-    if (s === 'confirmed' || s === 'in-progress') return 1; // Confirmed/in-chair, awaiting complete
-    return 2; // Completed / Cancelled history
-  };
-
   return [...bookings].sort((a, b) => {
-    // 1. Priority based on confirmation/completion status
-    const prioA = getStatusPriority(a.status);
-    const prioB = getStatusPriority(b.status);
-    if (prioA !== prioB) {
-      return prioA - prioB;
-    }
-
-    // 2. Primary chronological: compare createdAt timestamps (most recent first)
-    if (a.createdAt && b.createdAt) {
-      const timeA = new Date(a.createdAt).getTime();
-      const timeB = new Date(b.createdAt).getTime();
-      if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
-        return timeB - timeA;
-      }
-    } else if (a.createdAt && !b.createdAt) {
-      return -1;
-    } else if (!a.createdAt && b.createdAt) {
-      return 1;
-    }
-
-    // 3. Secondary: compare appointment date (YYYY-MM-DD) descending
+    // 1. Primary: Compare appointment date (YYYY-MM-DD) descending (e.g. 2026-09-25 before 2026-09-21)
     const dateA = a.date || '';
     const dateB = b.date || '';
     if (dateA !== dateB) {
       return dateB.localeCompare(dateA);
     }
 
-    // 4. Tertiary: compare appointment timeSlot descending
+    // 2. Secondary: Compare appointment timeSlot descending
     const slotA = a.timeSlot || '';
     const slotB = b.timeSlot || '';
-    return slotB.localeCompare(slotA);
+    if (slotA !== slotB) {
+      return slotB.localeCompare(slotA);
+    }
+
+    // 3. Tertiary: Compare createdAt / updatedAt timestamps descending
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : (a.updatedAt ? new Date(a.updatedAt).getTime() : 0);
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : (b.updatedAt ? new Date(b.updatedAt).getTime() : 0);
+    if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
+      return timeB - timeA;
+    }
+
+    return 0;
   });
 }
 

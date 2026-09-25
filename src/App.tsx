@@ -172,6 +172,9 @@ export default function App() {
       setNotifications(updatedNotifs);
     });
 
+    // Immediate initial fetch to ensure zero blank screen on mobile / cold starts
+    loadAllData().catch(() => {});
+
     // Periodic maintenance for expired read notifications (only when active tab is visible)
     const purgeInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {

@@ -799,7 +799,7 @@ export const api = {
     }
   },
 
-  // --- Bookings API with strict query boundaries & Latest-First Ordering ---
+  // --- Bookings API with strict query boundaries & Latest-First Sorting ---
   async getBookings(options?: {
     designerId?: string;
     date?: string;
@@ -824,14 +824,9 @@ export const api = {
         q = query(q, where('status', '==', options.status));
       }
 
-      // Order by date DESC so today and recent records are fetched first (never start from the oldest first day)
-      if (!options?.startDate && !options?.endDate && !options?.date && !options?.designerId) {
-        q = query(q, orderBy('date', 'desc'));
+      if (options?.limitCount) {
+        q = query(q, limit(options.limitCount));
       }
-
-      // STRICT RULE: Enforce query limit (default 100) to protect Firestore read quota
-      const maxLimit = options?.limitCount || 100;
-      q = query(q, limit(maxLimit));
 
       const snap = await getDocs(q);
       if (!snap.empty) {
@@ -846,7 +841,7 @@ export const api = {
     } catch (e) {
       console.warn('Firestore getBookings fallback:', e);
       try {
-        const fallbackSnap = await getDocs(query(collection(db, 'bookings'), limit(100)));
+        const fallbackSnap = await getDocs(collection(db, 'bookings'));
         if (!fallbackSnap.empty) {
           const list = sortBookingsMostRecentFirst(
             fallbackSnap.docs
@@ -863,7 +858,7 @@ export const api = {
   },
 
   /**
-   * Real-time listener for active and recent bookings (ordered by date desc, latest first)
+   * Real-time listener for all bookings (latest dates first)
    */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     let initialLoad = true;
@@ -878,15 +873,17 @@ export const api = {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // 2. Connect Firestore real-time snapshot ordered by date DESC with limit (100)
-    // This guarantees Today and the latest dates are retrieved first
+    // Proactive direct fetch on subscription to guarantee immediate rendering
+    this.getBookings().then((list) => {
+      if (list && list.length > 0) {
+        onUpdate(list);
+      }
+    }).catch(() => {});
+
+    // 2. Connect Firestore real-time snapshot
     let unsubscribeFirestore: () => void = () => {};
     try {
-      const q = query(
-        collection(db, 'bookings'),
-        orderBy('date', 'desc'),
-        limit(100)
-      );
+      const q = collection(db, 'bookings');
       unsubscribeFirestore = onSnapshot(
         q,
         (snap) => {
@@ -901,26 +898,11 @@ export const api = {
           initialLoad = false;
         },
         (error) => {
-          console.warn('subscribeToBookings (orderBy date) snapshot error, using fallback query:', error);
-          try {
-            const fallbackQ = query(
-              collection(db, 'bookings'),
-              limit(100)
-            );
-            unsubscribeFirestore = onSnapshot(fallbackQ, (fallbackSnap) => {
-              const list = sortBookingsMostRecentFirst(
-                fallbackSnap.docs
-                  .map(d => ({ id: d.id, ...d.data() } as Booking))
-                  .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
-              );
-              setLocalData(LOCAL_BOOKINGS_KEY, list);
-              onUpdate(list);
-            });
-          } catch {}
+          console.warn('subscribeToBookings snapshot warning:', error);
         }
       );
     } catch (e) {
-      console.warn('subscribeToBookings setup error:', e);
+      console.warn('subscribeToBookings setup warning:', e);
     }
 
     return () => {
@@ -932,22 +914,27 @@ export const api = {
   },
 
   /**
-   * Real-time listener for barber's active queue strictly bounded (max 100 limit)
+   * Real-time listener for barber's active queue strictly bounded (max 150 limit)
    */
   subscribeToBarberBookings(designerId: string, onUpdate: (bookings: Booking[]) => void): () => void {
-    let initialLoad = true;
-
     const syncSet = getSyncListeners('bookings');
     const filteredUpdate = (list: Booking[]) => {
-      onUpdate(list.filter(b => b.designerId === designerId));
+      onUpdate(list.filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId));
     };
     syncSet.add(filteredUpdate);
 
     // Initial emit of cached
-    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.designerId === designerId);
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId);
     if (cached.length > 0) {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
+
+    // Direct fetch
+    this.getBookings({ designerId }).then((list) => {
+      if (list && list.length > 0) {
+        onUpdate(list);
+      }
+    }).catch(() => {});
 
     let unsubscribeFirestore: () => void = () => {};
     if (designerId) {
@@ -955,7 +942,7 @@ export const api = {
         const q = query(
           collection(db, 'bookings'),
           where('designerId', '==', designerId),
-          limit(100)
+          limit(150)
         );
         unsubscribeFirestore = onSnapshot(
           q,
@@ -967,7 +954,6 @@ export const api = {
             );
 
             onUpdate(list);
-            initialLoad = false;
           },
           (error) => {
             console.warn('subscribeToBarberBookings error:', error);
