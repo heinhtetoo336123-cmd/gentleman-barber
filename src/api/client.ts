@@ -189,49 +189,20 @@ export function notifyLocalSubscribers(type: SyncDataType, data: any) {
 }
 
 function setLocalData<T>(key: string, value: T) {
-  // Always update in-memory cache first
+  // Always update in-memory cache first with complete objects
   memoryStorageCache.set(key, value);
 
-  // STRICT RULE: Never serialize massive collections (Bookings, Audit Logs, Sales, Expenses) to localStorage
-  if (key === LOCAL_BOOKINGS_KEY) {
-    if (Array.isArray(value)) {
-      try {
-        const lightweight = value.slice(0, 20).map(b => ({
-          id: b.id,
-          bookingCode: b.bookingCode,
-          designerId: b.designerId,
-          designerName: b.designerName,
-          customerName: b.customerName,
-          customerPhone: b.customerPhone,
-          date: b.date,
-          timeSlot: b.timeSlot,
-          status: b.status,
-          servicePrice: b.servicePrice,
-          price: b.price,
-          paymentMethod: b.paymentMethod
-        }));
-        localStorage.setItem(key, JSON.stringify(lightweight));
-      } catch {}
-    }
-    return;
-  }
-
-  if (key === LOCAL_LOGS_KEY || key === LOCAL_EXPENSES_KEY || key === LOCAL_RETAIL_SALES_KEY || key === LOCAL_NOTIFS_KEY || key === LOCAL_CLIENTS_KEY) {
-    if (Array.isArray(value)) {
-      try {
-        const lightweight = value.slice(0, 20);
-        localStorage.setItem(key, JSON.stringify(lightweight));
-      } catch {}
-    }
-    return;
-  }
-
+  // For LocalStorage: preserve complete objects (up to 60 items) with safe quota handling
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    if (Array.isArray(value)) {
+      const safeItems = value.slice(0, 60);
+      localStorage.setItem(key, JSON.stringify(safeItems));
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
   } catch (e) {
-    // Storage quota reached: purge bloated keys safely without throwing
+    // Storage quota reached: purge bloated auxiliary keys safely without throwing
     try {
-      localStorage.removeItem(LOCAL_BOOKINGS_KEY);
       localStorage.removeItem(LOCAL_LOGS_KEY);
       localStorage.removeItem(LOCAL_EXPENSES_KEY);
       localStorage.removeItem(LOCAL_RETAIL_SALES_KEY);
