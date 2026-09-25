@@ -81,8 +81,12 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
   const [activeClientPhone, setActiveClientPhone] = useState<string>(() => {
     if (userPhone && userPhone.trim()) return userPhone.trim();
     try {
-      const stored = localStorage.getItem('baba_booking_customer_phone');
-      if (stored && stored.trim()) return stored.trim();
+      const p1 = localStorage.getItem('baba_booking_customer_phone');
+      if (p1 && p1.trim()) return p1.trim();
+      const p2 = localStorage.getItem('baba_user_phone');
+      if (p2 && p2.trim()) return p2.trim();
+      const p3 = localStorage.getItem('baba_last_customer_phone');
+      if (p3 && p3.trim()) return p3.trim();
       const profile = localStorage.getItem('baba_user_profile_v1');
       if (profile) {
         const parsed = JSON.parse(profile);
@@ -367,28 +371,63 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
 
       {/* Bookings List */}
       {myFilteredBookings.length === 0 ? (
-        <div className="p-8 text-center bg-white border border-emerald-100 rounded-2xl space-y-2.5 shadow-2xs">
+        <div className="p-6 text-center bg-white border border-emerald-100 rounded-2xl space-y-4 shadow-2xs">
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto text-emerald-700">
             <Calendar className="w-6 h-6" />
           </div>
-          <p className="text-xs font-bold text-stone-800">
-            {!activeClientPhone ? 'No linked appointments' : 'No appointments found'}
-          </p>
-          <div className="flex items-center justify-center gap-2 pt-1">
-            {!activeClientPhone && (
-              <button
-                type="button"
-                onClick={() => setIsEditingPhone(true)}
-                className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-900 font-bold text-xs px-3 py-1.5 rounded-xl cursor-pointer transition-all shadow-2xs"
-              >
-                Link Phone
-              </button>
-            )}
+          <div className="space-y-1">
+            <p className="text-sm font-bold text-stone-900">
+              {!activeClientPhone ? 'ဘိုကင်မှတ်တမ်း ရှာမတွေ့သေးပါ' : 'ဤဖုန်းနံပါတ်ဖြင့် ဘိုကင်မှတ်တမ်း မရှိသေးပါ'}
+            </p>
+            <p className="text-xs text-stone-500 max-w-sm mx-auto">
+              {!activeClientPhone
+                ? 'သင် ဘိုကင်တင်စဉ်က အသုံးပြုခဲ့သော ဖုန်းနံပါတ် (သို့မဟုတ်) Booking Code ကို ထည့်သွင်း၍ ဘိုကင်မှတ်တမ်းများ ပြန်လည်ကြည့်ရှုနိုင်ပါသည်။'
+                : 'ဖုန်းနံပါတ်ပြောင်းလဲလိုပါက အောက်တွင် အသစ်ထည့်သွင်းနိုင်ပါသည် (ဥပမာ - 09xxxxxxxxx)'}
+            </p>
+          </div>
+
+          {/* Quick Phone Search Form in Empty State */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (inputPhone.trim()) {
+                const clean = inputPhone.trim().replace(/\s+/g, '');
+                setActiveClientPhone(clean);
+                localStorage.setItem('baba_booking_customer_phone', clean);
+                setIsEditingPhone(false);
+              }
+            }}
+            className="flex flex-col sm:flex-row items-center justify-center gap-2 max-w-md mx-auto pt-1"
+          >
+            <input
+              type="tel"
+              value={inputPhone}
+              onChange={(e) => setInputPhone(e.target.value)}
+              placeholder="သင်၏ ဘိုကင်ဖုန်းနံပါတ် ထည့်ပါ (09xxxxxxxxx)"
+              className="w-full sm:flex-1 bg-stone-50 border border-emerald-200 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-mono font-bold text-stone-900 focus:outline-none focus:bg-white shadow-2xs"
+            />
+            <button
+              type="submit"
+              className="w-full sm:w-auto px-4 py-2 bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-all shrink-0"
+            >
+              မှတ်တမ်းရှာမည်
+            </button>
+          </form>
+
+          <div className="flex items-center justify-center gap-3 pt-2">
             <button
               onClick={onOpenNewBooking}
-              className="bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs px-3.5 py-1.5 rounded-xl cursor-pointer shadow-2xs transition-all active:scale-98"
+              className="bg-stone-900 hover:bg-stone-950 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer shadow-2xs transition-all active:scale-98 flex items-center space-x-1.5"
             >
-              Book Appointment
+              <Plus className="w-3.5 h-3.5" />
+              <span>ဘိုကင်အသစ် တင်မည်</span>
+            </button>
+            <button
+              onClick={onRefresh}
+              className="bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-xs px-3 py-2 rounded-xl cursor-pointer transition-all flex items-center space-x-1.5"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh ဒေတာ</span>
             </button>
           </div>
         </div>

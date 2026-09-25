@@ -169,12 +169,20 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     });
   }, [bookings, clients]);
 
-  // All Walk-in Bookings across the entire dataset
+  // All Walk-in Bookings across the entire dataset (Latest First)
   const allWalkinBookings = useMemo(() => {
-    return bookings
-      .filter(b => b.isWalkin === true || b.bookingCode?.startsWith('WLK-') || (b.notes && b.notes.toLowerCase().includes('walk-in')))
+    return (bookings || [])
+      .filter(
+        (b) =>
+          b.isWalkin === true ||
+          b.bookingCode?.startsWith('WLK-') ||
+          (b.notes && /walk-?in|ဆိုင်ရောက်/i.test(b.notes)) ||
+          (b.customerName && /walk-?in|ဧည့်သည်/i.test(b.customerName))
+      )
       .sort((a, b) => {
-        const dateComp = (b.date || '').localeCompare(a.date || '');
+        const dA = (a.date || '').split('T')[0];
+        const dB = (b.date || '').split('T')[0];
+        const dateComp = dB.localeCompare(dA);
         if (dateComp !== 0) return dateComp;
         return (b.timeSlot || '').localeCompare(a.timeSlot || '');
       });
@@ -342,7 +350,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     monthAgo.setMonth(monthAgo.getMonth() - 1);
     const monthAgoStr = monthAgo.toISOString().split('T')[0];
 
-    return allWalkinBookings.filter(rec => {
+    return allWalkinBookings.filter((rec) => {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
         const matchName = (rec.customerName || '').toLowerCase().includes(q);
@@ -356,13 +364,15 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
         }
       }
 
-      if (historyPeriodFilter === 'today' && rec.date !== todayStrFormatted) return false;
-      if (historyPeriodFilter === 'yesterday' && rec.date !== yesterdayStr) return false;
-      if (historyPeriodFilter === 'this_week' && rec.date < weekAgoStr) return false;
-      if (historyPeriodFilter === 'this_month' && rec.date < monthAgoStr) return false;
+      const recDate = (rec.date || '').replace(/\//g, '-').split('T')[0];
+
+      if (historyPeriodFilter === 'today' && recDate !== todayStrFormatted) return false;
+      if (historyPeriodFilter === 'yesterday' && recDate !== yesterdayStr) return false;
+      if (historyPeriodFilter === 'this_week' && recDate < weekAgoStr) return false;
+      if (historyPeriodFilter === 'this_month' && recDate < monthAgoStr) return false;
       if (historyPeriodFilter === 'custom') {
-        if (historyCustomStartDate && rec.date < historyCustomStartDate) return false;
-        if (historyCustomEndDate && rec.date > historyCustomEndDate) return false;
+        if (historyCustomStartDate && recDate < historyCustomStartDate) return false;
+        if (historyCustomEndDate && recDate > historyCustomEndDate) return false;
       }
 
       if (historyDesignerFilter !== 'all' && rec.designerId !== historyDesignerFilter) return false;
@@ -379,7 +389,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     historyCustomEndDate,
     historyDesignerFilter,
     historyStatusFilter,
-    historyPaymentFilter
+    historyPaymentFilter,
   ]);
 
   // Analytics Metrics
@@ -391,10 +401,16 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     let stylistRevenueMap: Record<string, { name: string; count: number; revenue: number; commission: number }> = {};
 
     for (const b of allWalkinBookings) {
-      if (b.status !== 'completed') continue;
-      const price = b.servicePrice || 0;
-      const discount = b.discountAmount || 0;
-      const net = Math.max(0, price - discount);
+      if (b.status === 'cancelled') continue;
+      const rawPrice = Number(
+        b.price ??
+        b.servicePrice ??
+        (b.servicesList && b.servicesList.length > 0
+          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+          : 0)
+      );
+      const discount = Number(b.discountAmount || 0);
+      const net = Math.max(0, rawPrice - discount);
       const commission = b.commissionAmount || Math.round(net * 0.5);
 
       totalRevenue += net;

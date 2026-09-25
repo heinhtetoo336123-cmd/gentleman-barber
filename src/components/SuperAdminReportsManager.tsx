@@ -118,8 +118,14 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
     let commTotal = 0;
 
     completedBookings.forEach((b) => {
-      const originalPrice = b.servicePrice || 0;
-      const discount = b.discountAmount || 0;
+      const originalPrice = Number(
+        b.price ??
+        b.servicePrice ??
+        (b.servicesList && b.servicesList.length > 0
+          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+          : 0)
+      );
+      const discount = Number(b.discountAmount || 0);
       const finalPaid = Math.max(0, originalPrice - discount);
 
       grossRev += finalPaid;
@@ -153,7 +159,16 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
       dailyMap[d].bookingsCount += 1;
 
       if (b.status === 'completed') {
-        const netVal = Math.max(0, (b.servicePrice || 0) - (b.discountAmount || 0));
+        const rawP = Number(
+          b.price ??
+          b.servicePrice ??
+          (b.servicesList && b.servicesList.length > 0
+            ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+            : 0)
+        );
+        const disc = Number(b.discountAmount || 0);
+        const netVal = Math.max(0, rawP - disc);
+
         dailyMap[d].gross += netVal;
         if (b.paymentMethod === 'cash' || b.paymentMethod === 'pay_at_shop') {
           dailyMap[d].cash += netVal;
@@ -186,7 +201,16 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
     completedBookings.forEach((b) => {
       const dId = b.designerId;
       if (stylistMap[dId]) {
-        const netVal = Math.max(0, (b.servicePrice || 0) - (b.discountAmount || 0));
+        const rawP = Number(
+          b.price ??
+          b.servicePrice ??
+          (b.servicesList && b.servicesList.length > 0
+            ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+            : 0)
+        );
+        const disc = Number(b.discountAmount || 0);
+        const netVal = Math.max(0, rawP - disc);
+
         stylistMap[dId].count += 1;
         stylistMap[dId].gross += netVal;
         const comm = Math.round((netVal * stylistMap[dId].rate) / 100);
@@ -225,7 +249,16 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
       let gross = 0;
       let comm = 0;
       completed.forEach((b) => {
-        const netVal = Math.max(0, (b.servicePrice || 0) - (b.discountAmount || 0));
+        const rawP = Number(
+          b.price ??
+          b.servicePrice ??
+          (b.servicesList && b.servicesList.length > 0
+            ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+            : 0)
+        );
+        const disc = Number(b.discountAmount || 0);
+        const netVal = Math.max(0, rawP - disc);
+
         gross += netVal;
         const des = designers.find((d) => d.id === b.designerId);
         const cRate = des?.commissionPercent !== undefined ? des.commissionPercent : 50;

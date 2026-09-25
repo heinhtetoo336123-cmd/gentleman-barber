@@ -136,11 +136,21 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
     return () => unsub();
   }, []);
 
-  // Quick statistics (Only completed bookings count toward revenue)
-  const completedBookings = bookings.filter((b) => b.status === 'completed');
-  const totalRevenue = completedBookings.reduce((sum, b) => sum + (b.servicePrice || 0), 0);
+  // Quick statistics (Includes all completed and confirmed bookings revenue)
+  const activeBookingsList = bookings.filter((b) => b.status !== 'cancelled');
+  const totalRevenue = activeBookingsList.reduce((sum, b) => {
+    const rawP = Number(
+      b.price ??
+      b.servicePrice ??
+      (b.servicesList && b.servicesList.length > 0
+        ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+        : 0)
+    );
+    const disc = Number(b.discountAmount || 0);
+    return sum + Math.max(0, rawP - disc);
+  }, 0);
   const todayDateStr = new Date().toISOString().split('T')[0];
-  const todayBookingsCount = bookings.filter((b) => b.date === todayDateStr).length;
+  const todayBookingsCount = bookings.filter((b) => (b.date || '').split('T')[0] === todayDateStr).length;
 
   // Primary core pillars requested by user + essentials
   const controlModules = [

@@ -54,9 +54,9 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
   const isSuperAdmin = role === 'superadmin';
   const todayStr = getLocalTodayStr();
   
-  // Date & Mode Filter
+  // Date & Mode Filter (Default to 'month' to show all appointments & walk-ins in current period)
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
-  const [reportRangeMode, setReportRangeMode] = useState<'single' | 'month' | 'all'>('single');
+  const [reportRangeMode, setReportRangeMode] = useState<'single' | 'month' | 'all'>('month');
   const [activeTab, setActiveTab] = useState<SettlementTab>(initialTab || 'overview');
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'cash' | 'kpay' | 'wave' | 'pay_at_shop'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -108,16 +108,18 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
     };
   }, []);
 
-  // Filter bookings according to range mode
+  // Filter bookings according to range mode with robust ISO and date extraction
   const activeBookings = useMemo(() => {
     return bookings.filter(b => {
       if (b.status === 'cancelled') return false;
+      const bDate = (b.date || '').split('T')[0];
+      const sDate = (selectedDate || '').split('T')[0];
       if (reportRangeMode === 'single') {
-        return b.date === selectedDate;
+        return bDate === sDate;
       }
       if (reportRangeMode === 'month') {
-        const currentMonth = selectedDate.substring(0, 7); // YYYY-MM
-        return (b.date || '').startsWith(currentMonth);
+        const currentMonth = sDate.substring(0, 7); // YYYY-MM
+        return bDate.startsWith(currentMonth);
       }
       return true;
     });
@@ -126,12 +128,14 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
   // Filter expenses according to range mode
   const activeExpenses = useMemo(() => {
     return allExpenses.filter(e => {
+      const eDate = (e.date || '').split('T')[0];
+      const sDate = (selectedDate || '').split('T')[0];
       if (reportRangeMode === 'single') {
-        return e.date === selectedDate;
+        return eDate === sDate;
       }
       if (reportRangeMode === 'month') {
-        const currentMonth = selectedDate.substring(0, 7);
-        return (e.date || '').startsWith(currentMonth);
+        const currentMonth = sDate.substring(0, 7);
+        return eDate.startsWith(currentMonth);
       }
       return true;
     });
@@ -140,12 +144,14 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
   // Filter retail sales according to range mode
   const activeRetailSales = useMemo(() => {
     return allRetailSales.filter(s => {
+      const saleDate = (s.date || '').split('T')[0];
+      const sDate = (selectedDate || '').split('T')[0];
       if (reportRangeMode === 'single') {
-        return s.date === selectedDate;
+        return saleDate === sDate;
       }
       if (reportRangeMode === 'month') {
-        const currentMonth = selectedDate.substring(0, 7);
-        return (s.date || '').startsWith(currentMonth);
+        const currentMonth = sDate.substring(0, 7);
+        return saleDate.startsWith(currentMonth);
       }
       return true;
     });
@@ -164,9 +170,18 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
 
     for (const b of activeBookings) {
       if (b.status !== 'completed') continue;
-      const price = b.servicePrice - (b.discountAmount || 0);
+      const rawPrice = Number(
+        b.price ??
+        b.servicePrice ??
+        (b.servicesList && b.servicesList.length > 0
+          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+          : 0)
+      );
+      const discount = Number(b.discountAmount || 0);
+      const price = Math.max(0, rawPrice - discount);
+      
       servicesGross += price;
-      totalDiscount += b.discountAmount || 0;
+      totalDiscount += discount;
 
       const pMethod = b.paymentMethod || 'cash';
       if (pMethod === 'cash') {
@@ -278,10 +293,19 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
       };
     }
 
-    // Add haircut bookings (only completed bookings count toward revenue and payout)
+    // Add haircut bookings (Only completed services count toward realized revenue & commission payout)
     for (const b of activeBookings) {
       if (b.status !== 'completed') continue;
-      const price = b.servicePrice - (b.discountAmount || 0);
+      const rawPrice = Number(
+        b.price ??
+        b.servicePrice ??
+        (b.servicesList && b.servicesList.length > 0
+          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+          : 0)
+      );
+      const discount = Number(b.discountAmount || 0);
+      const price = Math.max(0, rawPrice - discount);
+
       if (!map[b.designerId]) {
         map[b.designerId] = {
           designer: designers.find(d => d.id === b.designerId),

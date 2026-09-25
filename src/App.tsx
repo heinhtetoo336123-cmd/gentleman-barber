@@ -145,23 +145,29 @@ export default function App() {
     window.addEventListener('click', handleUserInteraction);
     window.addEventListener('touchstart', handleUserInteraction);
 
-    // Listen for in-memory sync updates (0 Firestore reads across tabs and components)
-    const handleServicesUpdate = (e: any) => setServices(e.detail || e);
-    const handleDesignersUpdate = (e: any) => setDesigners(e.detail || e);
-    const handleSettingsUpdate = (e: any) => setShopSettings(e.detail || e);
-    const handleClientsUpdate = (e: any) => setClients(e.detail || e);
-    const handleBookingsUpdate = (e: any) => {
-      const data = e.detail || e;
-      if (Array.isArray(data)) setBookings(data);
-    };
+    // Subscribe to real-time updates for Bookings, Notifications, Designers, Services, Clients, and Settings
+    const unsubServices = api.subscribeToServices((updatedServices) => {
+      setServices(updatedServices);
+    });
 
-    window.addEventListener('baba_sync_services', handleServicesUpdate);
-    window.addEventListener('baba_sync_designers', handleDesignersUpdate);
-    window.addEventListener('baba_sync_settings', handleSettingsUpdate);
-    window.addEventListener('baba_sync_clients', handleClientsUpdate);
-    window.addEventListener('baba_sync_bookings', handleBookingsUpdate);
+    const unsubDesigners = api.subscribeToDesigners((updatedDesigners) => {
+      setDesigners(updatedDesigners);
+    });
 
-    // Only subscribe to real-time targeted notifications (bounded to 50 items)
+    const unsubSettings = api.subscribeToSettings((updatedSettings) => {
+      setShopSettings(updatedSettings);
+    });
+
+    const unsubClients = api.subscribeToClients((updatedClients) => {
+      setClients(updatedClients);
+    });
+
+    const unsubBookings = api.subscribeToBookings((updatedBookings) => {
+      setBookings(updatedBookings);
+      api.getStats().then(setStats).catch(() => {});
+    });
+
+    // Targeted real-time notifications
     const unsubNotifs = api.subscribeToNotifications(role, (updatedNotifs) => {
       setNotifications(updatedNotifs);
     });
@@ -174,12 +180,12 @@ export default function App() {
     return () => {
       window.removeEventListener('click', handleUserInteraction);
       window.removeEventListener('touchstart', handleUserInteraction);
-      window.removeEventListener('baba_sync_services', handleServicesUpdate);
-      window.removeEventListener('baba_sync_designers', handleDesignersUpdate);
-      window.removeEventListener('baba_sync_settings', handleSettingsUpdate);
-      window.removeEventListener('baba_sync_clients', handleClientsUpdate);
-      window.removeEventListener('baba_sync_bookings', handleBookingsUpdate);
       clearInterval(purgeInterval);
+      unsubServices();
+      unsubDesigners();
+      unsubSettings();
+      unsubClients();
+      unsubBookings();
       unsubNotifs();
     };
   }, [role]);
@@ -228,8 +234,8 @@ export default function App() {
     try {
       const storedBarberId = role === 'barber' ? (activeBarber?.id || localStorage.getItem('baba_active_barber_id') || undefined) : undefined;
       const bookingsPromise = role === 'barber' && storedBarberId
-        ? api.getBookings({ designerId: storedBarberId, limitCount: 100 })
-        : (role === 'admin' || role === 'superadmin' ? api.getBookings({ limitCount: 150 }) : api.getBookings({ limitCount: 50 }));
+        ? api.getBookings({ designerId: storedBarberId })
+        : api.getBookings();
 
       const [sList, dList, bList, nList, st, setts, cList] = await Promise.all([
         api.getServices(),

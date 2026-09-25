@@ -835,10 +835,9 @@ export const api = {
       if (options?.startDate && options?.endDate) {
         q = query(q, where('date', '>=', options.startDate), where('date', '<=', options.endDate));
       }
-
-      // Constrain limit to prevent downloading unbounded records
-      const maxLimit = options?.limitCount || (options?.date || options?.designerId ? 150 : 200);
-      q = query(q, limit(maxLimit));
+      if (options?.limitCount) {
+        q = query(q, limit(options.limitCount));
+      }
 
       const snap = await getDocs(q);
       if (!snap.empty) {
@@ -857,7 +856,7 @@ export const api = {
     return sortBookingsMostRecentFirst(cached);
   },
 
-  subscribeToBookings(onUpdate: (bookings: Booking[]) => void, limitCount = 50): () => void {
+  subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     let initialLoad = true;
 
     // 1. Register in-memory & cross-tab sync listener
@@ -870,12 +869,11 @@ export const api = {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // 2. Connect Firestore real-time snapshot with bounded limit
+    // 2. Connect Firestore real-time snapshot for the entire collection
     let unsubscribeFirestore: () => void = () => {};
     try {
-      const q = query(collection(db, 'bookings'), limit(limitCount));
       unsubscribeFirestore = onSnapshot(
-        q,
+        collection(db, 'bookings'),
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
