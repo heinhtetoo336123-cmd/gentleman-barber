@@ -49,14 +49,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('explore'); // 'explore' | 'designers' | 'my-bookings' | 'admin-dashboard' | 'barber-portal'
   const [adminSubTab, setAdminSubTab] = useState<AdminSection>('hub');
 
-  // App Data
-  const [services, setServices] = useState<Service[]>([]);
-  const [designers, setDesigners] = useState<Designer[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [clients, setClients] = useState<UserProfile[]>([]);
+  // App Data (Loaded synchronously from local cache so Frame 0 renders instant data with 0ms delay and zero 0-flashes)
+  const [services, setServices] = useState<Service[]>(() => api.getCachedServices());
+  const [designers, setDesigners] = useState<Designer[]>(() => api.getCachedDesigners());
+  const [bookings, setBookings] = useState<Booking[]>(() => api.getCachedBookings());
+  const [clients, setClients] = useState<UserProfile[]>(() => api.getCachedClients());
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [stats, setStats] = useState<AppStats | null>(null);
-  const [shopSettings, setShopSettings] = useState<PaymentSettings | null>(null);
+  const [stats, setStats] = useState<AppStats | null>(() => api.getCachedStats());
+  const [shopSettings, setShopSettings] = useState<PaymentSettings | null>(() => api.getCachedSettings());
 
   // Selected category filter on user side
   const [selectedCategory, setSelectedCategory] = useState<string>('All');

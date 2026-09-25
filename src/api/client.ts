@@ -967,6 +967,52 @@ export const api = {
     };
   },
 
+  // --- Synchronous Instant-Cache Accessors (Eliminates Initial 0-Flash on App Launch) ---
+  getCachedBookings(): Booking[] {
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    return sortBookingsMostRecentFirst(cached);
+  },
+
+  getCachedServices(): Service[] {
+    return getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+  },
+
+  getCachedDesigners(): Designer[] {
+    return getLocalData<Designer[]>(LOCAL_DESIGNERS_KEY, []);
+  },
+
+  getCachedSettings(): PaymentSettings | null {
+    return getLocalData<PaymentSettings | null>(LOCAL_SETTINGS_KEY, null);
+  },
+
+  getCachedClients(): UserProfile[] {
+    return getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
+  },
+
+  getCachedStats(): AppStats | null {
+    const bookings = this.getCachedBookings();
+    const services = this.getCachedServices();
+    const designers = this.getCachedDesigners();
+    if (bookings.length === 0 && services.length === 0 && designers.length === 0) return null;
+
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const todayBookings = bookings.filter(b => b.date === todayStr);
+    const pendingRequests = bookings.filter(b => b.status === 'pending');
+    const estimatedRevenue = bookings
+      .filter(b => b.status === 'completed')
+      .reduce((sum, b) => sum + (b.totalPrice || b.price || 0), 0);
+
+    return {
+      totalBookings: bookings.length,
+      pendingRequests: pendingRequests.length,
+      todayBookings: todayBookings.length,
+      estimatedRevenue,
+      activeServicesCount: services.filter(s => s.active !== false).length,
+      activeDesignersCount: designers.filter(d => d.active !== false).length,
+    };
+  },
+
   async createBooking(bookingData: {
     serviceId: string;
     servicesList?: BookingServiceItem[];
@@ -1243,7 +1289,7 @@ export const api = {
     };
 
     try {
-      await setDoc(doc(db, 'bookings', bookingId), newBooking);
+      await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
 
       const notifId = `notif-wlk-${Date.now()}`;
       const adminNotif: NotificationItem = {
@@ -1529,7 +1575,7 @@ export const api = {
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     const target = current.find(b => b.id === id);
     try {
-      await updateDoc(doc(db, 'bookings', id), updates);
+      await updateDoc(doc(db, 'bookings', id), sanitizeForFirestore(updates));
     } catch (e) {
       console.warn('Firestore updateBooking fallback:', e);
     }
