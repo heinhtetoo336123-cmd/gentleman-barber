@@ -46,6 +46,35 @@ const LOCAL_DELETED_DES_KEY = 'babashop_deleted_des_ids_v2';
 const LOCAL_DELETED_SRV_KEY = 'babashop_deleted_srv_ids_v2';
 const LOCAL_DELETED_CLIENTS_KEY = 'babashop_deleted_clients_ids_v2';
 
+/**
+ * Clean up legacy bloated collections and prevent QuotaExceededError crashes
+ */
+export function purgeBloatedStorage() {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const bloatedKeys = [
+      LOCAL_BOOKINGS_KEY,
+      LOCAL_LOGS_KEY,
+      LOCAL_EXPENSES_KEY,
+      LOCAL_RETAIL_SALES_KEY,
+      'babashop_debug_logs',
+      'babashop_cached_analytics',
+      'babashop_audit_logs',
+      'babashop_logs',
+      'babashop_temp_store',
+      'babashop_services_v1',
+      'babashop_designers_v1',
+      'babashop_bookings_v1',
+      'babashop_notifs_v1'
+    ];
+    bloatedKeys.forEach(k => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+  } catch {}
+}
+// Execute on module load
+purgeBloatedStorage();
+
 function getDeletedIds(key: string): Set<string> {
   try {
     const raw = localStorage.getItem(key);
@@ -63,7 +92,14 @@ function addDeletedId(key: string, id: string) {
   } catch {}
 }
 
+// Memory cache fallback for items when localStorage hits strict device limits
+const memoryStorageCache = new Map<string, any>();
+
 function getLocalData<T>(key: string, fallback: T): T {
+  if (memoryStorageCache.has(key)) {
+    return memoryStorageCache.get(key) as T;
+  }
+
   try {
     const item = localStorage.getItem(key);
     if (item) {
@@ -73,14 +109,8 @@ function getLocalData<T>(key: string, fallback: T): T {
     }
   } catch {}
   
-  if (memoryStorageCache.has(key)) {
-    return memoryStorageCache.get(key) as T;
-  }
   return fallback;
 }
-
-// Memory cache fallback for items when localStorage hits strict device limits
-const memoryStorageCache = new Map<string, any>();
 
 export type SyncDataType = 'services' | 'designers' | 'bookings' | 'notifications' | 'settings' | 'clients' | 'promos' | 'expenses' | 'expense_presets' | 'products' | 'retail_sales';
 
@@ -161,52 +191,38 @@ function setLocalData<T>(key: string, value: T) {
   // Always update in-memory cache first
   memoryStorageCache.set(key, value);
 
+  // STRICT RULE: Never serialize massive collections (Bookings, Audit Logs, Sales, Expenses) to localStorage
+  if (key === LOCAL_BOOKINGS_KEY) {
+    // Only cache top 20 lightweight booking items if needed, or rely purely on memoryStorageCache
+    if (Array.isArray(value)) {
+      try {
+        const lightweight = value.slice(0, 20);
+        localStorage.setItem(key, JSON.stringify(lightweight));
+      } catch {}
+    }
+    return;
+  }
+
+  if (key === LOCAL_LOGS_KEY || key === LOCAL_EXPENSES_KEY || key === LOCAL_RETAIL_SALES_KEY || key === LOCAL_NOTIFS_KEY) {
+    if (Array.isArray(value)) {
+      try {
+        const lightweight = value.slice(0, 25);
+        localStorage.setItem(key, JSON.stringify(lightweight));
+      } catch {}
+    }
+    return;
+  }
+
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
-    console.warn('LocalStorage save error encountered, initiating quota cleanup:', e);
+    // Storage quota reached: purge bloated keys safely without throwing
     try {
-      // 1. Clear legacy, bulky logs & stale temporary cache keys
-      const keysToPurge = [
-        LOCAL_LOGS_KEY,
-        'babashop_debug_logs',
-        'babashop_cached_analytics',
-        'babashop_audit_logs',
-        'babashop_logs',
-        'babashop_temp_store',
-        'babashop_services_v1',
-        'babashop_designers_v1',
-        'babashop_bookings_v1',
-        'babashop_notifs_v1'
-      ];
-      keysToPurge.forEach((k) => {
-        try { localStorage.removeItem(k); } catch {}
-      });
-
-      // 2. If it's a collection containing images, strip oversized base64 data to keep local storage ultra-light
-      let serialized = JSON.stringify(value);
-      if (serialized.length > 500000 && Array.isArray(value)) {
-        const lightweightValue = value.map((item: any) => {
-          if (typeof item === 'object' && item !== null) {
-            const clone = { ...item };
-            if (typeof clone.avatarUrl === 'string' && clone.avatarUrl.startsWith('data:image/') && clone.avatarUrl.length > 50000) {
-              clone.avatarUrl = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400';
-            }
-            if (typeof clone.imageUrl === 'string' && clone.imageUrl.startsWith('data:image/') && clone.imageUrl.length > 50000) {
-              clone.imageUrl = 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=600';
-            }
-            return clone;
-          }
-          return item;
-        });
-        serialized = JSON.stringify(lightweightValue);
-      }
-
-      localStorage.setItem(key, serialized);
-    } catch (retryErr) {
-      // Memory fallback handles the state safely if browser storage is strictly filled
-      console.warn('LocalStorage full, active session maintained in memory cache.');
-    }
+      localStorage.removeItem(LOCAL_BOOKINGS_KEY);
+      localStorage.removeItem(LOCAL_LOGS_KEY);
+      localStorage.removeItem(LOCAL_EXPENSES_KEY);
+      localStorage.removeItem(LOCAL_RETAIL_SALES_KEY);
+    } catch {}
   }
 }
 
@@ -800,9 +816,31 @@ export const api = {
   },
 
   // --- Bookings API ---
-  async getBookings(): Promise<Booking[]> {
+  async getBookings(options?: {
+    designerId?: string;
+    date?: string;
+    startDate?: string;
+    endDate?: string;
+    limitCount?: number;
+  }): Promise<Booking[]> {
     try {
-      const snap = await getDocs(collection(db, 'bookings'));
+      let q = query(collection(db, 'bookings'));
+
+      if (options?.designerId) {
+        q = query(q, where('designerId', '==', options.designerId));
+      }
+      if (options?.date) {
+        q = query(q, where('date', '==', options.date));
+      }
+      if (options?.startDate && options?.endDate) {
+        q = query(q, where('date', '>=', options.startDate), where('date', '<=', options.endDate));
+      }
+
+      // Constrain limit to prevent downloading unbounded records
+      const maxLimit = options?.limitCount || (options?.date || options?.designerId ? 150 : 200);
+      q = query(q, limit(maxLimit));
+
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const list = sortBookingsMostRecentFirst(
           snap.docs
@@ -811,20 +849,15 @@ export const api = {
         );
         setLocalData(LOCAL_BOOKINGS_KEY, list);
         return list;
-      } else {
-        const savedRaw = localStorage.getItem(LOCAL_BOOKINGS_KEY);
-        if (savedRaw !== null) {
-          return sortBookingsMostRecentFirst(JSON.parse(savedRaw));
-        }
       }
     } catch (e) {
       console.warn('Firestore getBookings fallback:', e);
     }
-    const savedRaw = localStorage.getItem(LOCAL_BOOKINGS_KEY);
-    return savedRaw !== null ? sortBookingsMostRecentFirst(JSON.parse(savedRaw)) : [];
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    return sortBookingsMostRecentFirst(cached);
   },
 
-  subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
+  subscribeToBookings(onUpdate: (bookings: Booking[]) => void, limitCount = 50): () => void {
     let initialLoad = true;
 
     // 1. Register in-memory & cross-tab sync listener
@@ -837,11 +870,12 @@ export const api = {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // 2. Connect Firestore real-time snapshot
+    // 2. Connect Firestore real-time snapshot with bounded limit
     let unsubscribeFirestore: () => void = () => {};
     try {
+      const q = query(collection(db, 'bookings'), limit(limitCount));
       unsubscribeFirestore = onSnapshot(
-        collection(db, 'bookings'),
+        q,
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
@@ -863,6 +897,58 @@ export const api = {
 
     return () => {
       syncSet.delete(onUpdate);
+      try {
+        unsubscribeFirestore();
+      } catch {}
+    };
+  },
+
+  subscribeToBarberBookings(designerId: string, onUpdate: (bookings: Booking[]) => void): () => void {
+    let initialLoad = true;
+
+    const syncSet = getSyncListeners('bookings');
+    const filteredUpdate = (list: Booking[]) => {
+      onUpdate(list.filter(b => b.designerId === designerId));
+    };
+    syncSet.add(filteredUpdate);
+
+    // Initial emit of cached
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.designerId === designerId);
+    if (cached.length > 0) {
+      onUpdate(sortBookingsMostRecentFirst(cached));
+    }
+
+    let unsubscribeFirestore: () => void = () => {};
+    if (designerId) {
+      try {
+        const q = query(
+          collection(db, 'bookings'),
+          where('designerId', '==', designerId),
+          limit(100)
+        );
+        unsubscribeFirestore = onSnapshot(
+          q,
+          (snap) => {
+            const list = sortBookingsMostRecentFirst(
+              snap.docs
+                .map(d => ({ id: d.id, ...d.data() } as Booking))
+                .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
+            );
+
+            onUpdate(list);
+            initialLoad = false;
+          },
+          (error) => {
+            console.warn('subscribeToBarberBookings error:', error);
+          }
+        );
+      } catch (e) {
+        console.warn('subscribeToBarberBookings setup error:', e);
+      }
+    }
+
+    return () => {
+      syncSet.delete(filteredUpdate);
       try {
         unsubscribeFirestore();
       } catch {}
@@ -2670,7 +2756,8 @@ export const api = {
     };
 
     try {
-      const snap = await getDocs(collection(db, 'notifications'));
+      const q = query(collection(db, 'notifications'), orderBy('timestamp', 'desc'), limit(50));
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
         list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -2724,8 +2811,9 @@ export const api = {
 
     let unsubscribeFirestore: () => void = () => {};
     try {
+      const q = query(collection(db, 'notifications'), orderBy('timestamp', 'desc'), limit(50));
       unsubscribeFirestore = onSnapshot(
-        collection(db, 'notifications'),
+        q,
         (snap) => {
           const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
           list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

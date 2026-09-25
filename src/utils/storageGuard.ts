@@ -100,7 +100,27 @@ export function emergencyStorageCleanup(): boolean {
       }
     } catch {}
 
-    // 4. Clean phone-scoped booking lists if numerous
+    // 4. Purge bloated heavy cache collections to ensure storage stays well below quota
+    const bulkyKeysToPurge = [
+      'babashop_bookings_v2',
+      'babashop_audit_logs_v2',
+      'babashop_expenses_v2',
+      'babashop_retail_sales_v2',
+      'babashop_debug_logs',
+      'babashop_cached_analytics',
+      'babashop_audit_logs',
+      'babashop_logs',
+      'babashop_temp_store',
+      'babashop_services_v1',
+      'babashop_designers_v1',
+      'babashop_bookings_v1',
+      'babashop_notifs_v1'
+    ];
+    bulkyKeysToPurge.forEach(k => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+
+    // 5. Clean phone-scoped booking lists if numerous
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
