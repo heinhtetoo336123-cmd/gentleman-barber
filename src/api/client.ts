@@ -27,6 +27,7 @@ import {
   saveMyBookingId
 } from '../utils/notifications';
 import { sortBookingsMostRecentFirst, sortServicesForClient } from '../utils/formatters';
+import { getLocalTodayStr } from '../utils/timeSlots';
 import { calculateTierFromPoints } from '../utils/tierStyles';
 import { verifyAdminResetPassword, decryptSessionData } from '../lib/authCrypto';
 
@@ -193,20 +194,32 @@ function setLocalData<T>(key: string, value: T) {
 
   // STRICT RULE: Never serialize massive collections (Bookings, Audit Logs, Sales, Expenses) to localStorage
   if (key === LOCAL_BOOKINGS_KEY) {
-    // Only cache top 20 lightweight booking items if needed, or rely purely on memoryStorageCache
     if (Array.isArray(value)) {
       try {
-        const lightweight = value.slice(0, 20);
+        const lightweight = value.slice(0, 20).map(b => ({
+          id: b.id,
+          bookingCode: b.bookingCode,
+          designerId: b.designerId,
+          designerName: b.designerName,
+          customerName: b.customerName,
+          customerPhone: b.customerPhone,
+          date: b.date,
+          timeSlot: b.timeSlot,
+          status: b.status,
+          servicePrice: b.servicePrice,
+          price: b.price,
+          paymentMethod: b.paymentMethod
+        }));
         localStorage.setItem(key, JSON.stringify(lightweight));
       } catch {}
     }
     return;
   }
 
-  if (key === LOCAL_LOGS_KEY || key === LOCAL_EXPENSES_KEY || key === LOCAL_RETAIL_SALES_KEY || key === LOCAL_NOTIFS_KEY) {
+  if (key === LOCAL_LOGS_KEY || key === LOCAL_EXPENSES_KEY || key === LOCAL_RETAIL_SALES_KEY || key === LOCAL_NOTIFS_KEY || key === LOCAL_CLIENTS_KEY) {
     if (Array.isArray(value)) {
       try {
-        const lightweight = value.slice(0, 25);
+        const lightweight = value.slice(0, 20);
         localStorage.setItem(key, JSON.stringify(lightweight));
       } catch {}
     }
@@ -815,12 +828,13 @@ export const api = {
     }
   },
 
-  // --- Bookings API ---
+  // --- Bookings API with strict query boundaries & Latest-First Ordering ---
   async getBookings(options?: {
     designerId?: string;
     date?: string;
     startDate?: string;
     endDate?: string;
+    status?: string;
     limitCount?: number;
   }): Promise<Booking[]> {
     try {
@@ -835,9 +849,18 @@ export const api = {
       if (options?.startDate && options?.endDate) {
         q = query(q, where('date', '>=', options.startDate), where('date', '<=', options.endDate));
       }
-      if (options?.limitCount) {
-        q = query(q, limit(options.limitCount));
+      if (options?.status) {
+        q = query(q, where('status', '==', options.status));
       }
+
+      // Order by date DESC so today and recent records are fetched first (never start from the oldest first day)
+      if (!options?.startDate && !options?.endDate && !options?.date && !options?.designerId) {
+        q = query(q, orderBy('date', 'desc'));
+      }
+
+      // STRICT RULE: Enforce query limit (default 100) to protect Firestore read quota
+      const maxLimit = options?.limitCount || 100;
+      q = query(q, limit(maxLimit));
 
       const snap = await getDocs(q);
       if (!snap.empty) {
@@ -851,11 +874,26 @@ export const api = {
       }
     } catch (e) {
       console.warn('Firestore getBookings fallback:', e);
+      try {
+        const fallbackSnap = await getDocs(query(collection(db, 'bookings'), limit(100)));
+        if (!fallbackSnap.empty) {
+          const list = sortBookingsMostRecentFirst(
+            fallbackSnap.docs
+              .map(d => ({ id: d.id, ...d.data() } as Booking))
+              .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
+          );
+          setLocalData(LOCAL_BOOKINGS_KEY, list);
+          return list;
+        }
+      } catch {}
     }
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     return sortBookingsMostRecentFirst(cached);
   },
 
+  /**
+   * Real-time listener for active and recent bookings (ordered by date desc, latest first)
+   */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     let initialLoad = true;
 
@@ -869,11 +907,17 @@ export const api = {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // 2. Connect Firestore real-time snapshot for the entire collection
+    // 2. Connect Firestore real-time snapshot ordered by date DESC with limit (100)
+    // This guarantees Today and the latest dates are retrieved first
     let unsubscribeFirestore: () => void = () => {};
     try {
-      unsubscribeFirestore = onSnapshot(
+      const q = query(
         collection(db, 'bookings'),
+        orderBy('date', 'desc'),
+        limit(100)
+      );
+      unsubscribeFirestore = onSnapshot(
+        q,
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
@@ -886,7 +930,22 @@ export const api = {
           initialLoad = false;
         },
         (error) => {
-          console.warn('subscribeToBookings snapshot error:', error);
+          console.warn('subscribeToBookings (orderBy date) snapshot error, using fallback query:', error);
+          try {
+            const fallbackQ = query(
+              collection(db, 'bookings'),
+              limit(100)
+            );
+            unsubscribeFirestore = onSnapshot(fallbackQ, (fallbackSnap) => {
+              const list = sortBookingsMostRecentFirst(
+                fallbackSnap.docs
+                  .map(d => ({ id: d.id, ...d.data() } as Booking))
+                  .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
+              );
+              setLocalData(LOCAL_BOOKINGS_KEY, list);
+              onUpdate(list);
+            });
+          } catch {}
         }
       );
     } catch (e) {
@@ -901,6 +960,9 @@ export const api = {
     };
   },
 
+  /**
+   * Real-time listener for barber's active queue strictly bounded (max 100 limit)
+   */
   subscribeToBarberBookings(designerId: string, onUpdate: (bookings: Booking[]) => void): () => void {
     let initialLoad = true;
 
@@ -2115,7 +2177,7 @@ export const api = {
 
     let unsubscribeFirestore: () => void = () => {};
     try {
-      const q = query(collection(db, 'clients'));
+      const q = query(collection(db, 'clients'), limit(50));
       unsubscribeFirestore = onSnapshot(
         q,
         (snap) => {
@@ -3352,8 +3414,11 @@ export const api = {
     const current = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
     wrappedCb(current);
 
-    // Firestore listener
-    const unsub = onSnapshot(collection(db, 'shop_expenses'), (snap) => {
+    // Firestore listener with strict query limit
+    const q = filterDate
+      ? query(collection(db, 'shop_expenses'), where('date', '==', filterDate), limit(50))
+      : query(collection(db, 'shop_expenses'), limit(50));
+    const unsub = onSnapshot(q, (snap) => {
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
         setLocalData(LOCAL_EXPENSES_KEY, list);
@@ -3608,7 +3673,10 @@ export const api = {
     const current = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
     wrappedCb(current);
 
-    const unsub = onSnapshot(collection(db, 'retail_sales'), (snap) => {
+    const q = filterDate
+      ? query(collection(db, 'retail_sales'), where('date', '==', filterDate), limit(50))
+      : query(collection(db, 'retail_sales'), limit(50));
+    const unsub = onSnapshot(q, (snap) => {
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
         setLocalData(LOCAL_RETAIL_SALES_KEY, list);

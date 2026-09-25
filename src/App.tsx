@@ -172,10 +172,12 @@ export default function App() {
       setNotifications(updatedNotifs);
     });
 
-    // Periodic maintenance for expired read notifications (every 5 minutes)
+    // Periodic maintenance for expired read notifications (only when active tab is visible)
     const purgeInterval = setInterval(() => {
-      api.purgeExpiredReadNotifications().catch(() => {});
-    }, 5 * 60 * 1000);
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        api.purgeExpiredReadNotifications().catch(() => {});
+      }
+    }, 10 * 60 * 1000);
 
     return () => {
       window.removeEventListener('click', handleUserInteraction);
