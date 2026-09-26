@@ -1,8 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Designer, Booking, NotificationItem } from '../types';
 import { Language } from '../data/i18n';
 import { formatPrice, sortBookingsMostRecentFirst } from '../utils/formatters';
-import { isNotificationForBarber, getClearedNotificationIds } from '../utils/notifications';
+import {
+  isNotificationForBarber,
+  getClearedNotificationIds,
+  addClearedNotificationId,
+  addMultipleClearedNotificationIds
+} from '../utils/notifications';
 import { api } from '../api/client';
 import { playNotificationChime, playSuccessChime } from '../utils/audio';
 import {
@@ -361,14 +366,21 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
     return barberBookings.filter((b) => b.status === 'pending').length;
   }, [barberBookings]);
 
+  // Local In-Memory Notifications State for Zero-Server Re-fetch & Instant Deletions
+  const [localNotifsList, setLocalNotifsList] = useState<NotificationItem[]>(notifications);
+
+  useEffect(() => {
+    setLocalNotifsList(notifications);
+  }, [notifications]);
+
   // Barber-Relevant Notifications: Strictly restricted to this specific booked barber only!
   const barberNotifications = useMemo(() => {
     if (!activeDesigner?.id) return [];
     const clearedIds = getClearedNotificationIds();
-    return notifications.filter((n) => {
+    return localNotifsList.filter((n) => {
       return isNotificationForBarber(n, activeDesigner.id, activeDesigner.phone, activeDesigner.name, clearedIds);
     });
-  }, [notifications, activeDesigner]);
+  }, [localNotifsList, activeDesigner]);
 
   const unreadNotifCount = useMemo(() => {
     return barberNotifications.filter((n) => !n.read).length;
@@ -431,34 +443,72 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
     }
   };
 
-  // Notification Actions
+  // 1. OPTIMISTIC ZERO-READ SINGLE NOTIFICATION DELETE
+  const handleDeleteNotification = useCallback(async (id: string) => {
+    addClearedNotificationId(id);
+    // a) In-memory React state update (Instant 0ms UI update)
+    setLocalNotifsList((prev) => prev.filter((n) => n.id !== id));
+    // b) Atomic Firestore deleteDoc without re-fetching any collections
+    try {
+      await api.deleteNotification(id);
+    } catch (err) {
+      console.warn('Atomic deleteNotification failed:', err);
+    }
+  }, []);
+
+  // 2. OPTIMISTIC ZERO-READ NOTIFICATION CLICK / MARK READ
   const handleNotificationClick = async (n: NotificationItem) => {
     if (!n.read) {
+      playNotificationChime();
+      const nowIso = new Date().toISOString();
+      // a) Immediate in-memory React state update
+      setLocalNotifsList((prev) =>
+        prev.map((item) => (item.id === n.id ? { ...item, read: true, readAt: nowIso } : item))
+      );
+      // b) Atomic Firestore updateDoc without re-fetching collections
       try {
-        playNotificationChime();
-        await api.markNotificationsRead('all', [n.id]);
-        n.read = true;
-        n.readAt = new Date().toISOString();
-        onRefresh();
+        await api.markNotificationsRead('barber', [n.id]);
       } catch (err) {
-        console.error('Failed to mark notification read:', err);
+        console.warn('Atomic markNotificationsRead failed:', err);
       }
     }
   };
 
+  // 3. OPTIMISTIC ZERO-READ MARK ALL AS READ
   const handleMarkAllRead = async () => {
-    const ids = barberNotifications.map((n) => n.id);
-    await api.markNotificationsRead('all', ids);
+    const unreadIds = barberNotifications.filter((n) => !n.read).map((n) => n.id);
+    if (unreadIds.length === 0) return;
     playSuccessChime();
-    onRefresh();
+    const nowIso = new Date().toISOString();
+    const idSet = new Set(unreadIds);
+    // a) Immediate in-memory React state update
+    setLocalNotifsList((prev) =>
+      prev.map((item) => (idSet.has(item.id) ? { ...item, read: true, readAt: nowIso } : item))
+    );
+    // b) Atomic Firestore updates without re-fetching collections
+    try {
+      await api.markNotificationsRead('barber', unreadIds);
+    } catch (err) {
+      console.warn('Atomic markAllRead failed:', err);
+    }
   };
 
+  // 4. OPTIMISTIC ZERO-READ CLEAR ALL NOTIFICATIONS
   const handleClearNotifs = async () => {
     if (confirm(lang === 'my' ? 'သတိပေးချက်များ အားလုံးကို ရှင်းလင်းရန် သေချာပါသလား?' : 'Clear all notifications?')) {
       const ids = barberNotifications.map((n) => n.id);
-      await api.clearAllNotifications('all', ids);
+      if (ids.length === 0) return;
       playSuccessChime();
-      onRefresh();
+      addMultipleClearedNotificationIds(ids);
+      const idSet = new Set(ids);
+      // a) Immediate in-memory React state update
+      setLocalNotifsList((prev) => prev.filter((item) => !idSet.has(item.id)));
+      // b) Atomic Firestore deleteDoc without re-fetching collections
+      try {
+        await api.clearAllNotifications('barber', ids);
+      } catch (err) {
+        console.warn('Atomic clearAllNotifications failed:', err);
+      }
     }
   };
 
@@ -1480,10 +1530,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                             <AutoDeleteCountdownBadge
                               notification={n}
                               lang={lang}
-                              onExpire={async (id) => {
-                                await api.deleteNotification(id);
-                                onRefresh();
-                              }}
+                              onExpire={handleDeleteNotification}
                             />
                           </div>
                         )}
@@ -1491,10 +1538,9 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                     </div>
 
                     <button
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        await api.deleteNotification(n.id);
-                        onRefresh();
+                        handleDeleteNotification(n.id);
                       }}
                       className="p-1.5 rounded-lg text-stone-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer transition-colors shrink-0"
                       title="Delete"

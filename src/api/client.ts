@@ -828,7 +828,10 @@ export const api = {
     }
 
     try {
-      const snap = await getDocs(collection(db, 'bookings'));
+      const q = options?.limitCount
+        ? query(collection(db, 'bookings'), limit(options.limitCount))
+        : collection(db, 'bookings');
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const list = sortBookingsMostRecentFirst(
           snap.docs
@@ -1038,7 +1041,7 @@ export const api = {
     // Duplicate Txn Check
     if (bookingData.paymentTxnId) {
       try {
-        const existing = (await this.getBookings()).find(b => b.paymentTxnId === bookingData.paymentTxnId && b.id !== bookingData.holdId);
+        const existing = this.getCachedBookings().find(b => b.paymentTxnId === bookingData.paymentTxnId && b.id !== bookingData.holdId);
         if (existing) {
           bookingData.paymentTxnId = `${bookingData.paymentTxnId}-${Math.floor(100 + Math.random() * 900)}`;
         }
@@ -1136,20 +1139,10 @@ export const api = {
         targetClientPhone: newBooking.customerPhone,
       };
 
-      try {
-        await Promise.all([
-          setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore(adminNotif)),
-          setDoc(doc(db, 'notifications', barberNotifId), sanitizeForFirestore(barberNotif)),
-          setDoc(doc(db, 'notifications', clientNotifId), sanitizeForFirestore(clientNotif)),
-        ]);
-      } catch (ne) {
-        console.warn('Firestore notification save fallback:', ne);
-      }
-
       saveMyBookingId(newBooking.id, newBooking.bookingCode, newBooking.customerPhone);
 
       const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-      const allUpdatedNotifs = [clientNotif, barberNotif, adminNotif, ...notifsList];
+      const allUpdatedNotifs = [clientNotif, barberNotif, adminNotif, ...notifsList].slice(0, 50);
       setLocalData(LOCAL_NOTIFS_KEY, allUpdatedNotifs);
       notifyLocalSubscribers('notifications', allUpdatedNotifs);
     } catch (e) {
@@ -1319,18 +1312,8 @@ export const api = {
         saveMyBookingId(newBooking.id, newBooking.bookingCode, newBooking.customerPhone);
       }
 
-      try {
-        await Promise.all(
-          notifsToSave.map((n) =>
-            setDoc(doc(db, 'notifications', n.id), sanitizeForFirestore(n))
-          )
-        );
-      } catch (ne) {
-        console.warn('Firestore notification save fallback:', ne);
-      }
-
       const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-      const allUpdatedNotifs = [...notifsToSave, ...notifsList];
+      const allUpdatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
       setLocalData(LOCAL_NOTIFS_KEY, allUpdatedNotifs);
       notifyLocalSubscribers('notifications', allUpdatedNotifs);
     } catch (e) {
@@ -1377,7 +1360,7 @@ export const api = {
     adminReply?: string
   ): Promise<Booking> {
     const now = new Date().toISOString();
-    const currentList = await this.getBookings();
+    const currentList = this.getCachedBookings();
     const target = currentList.find(b => b.id === id);
 
     let statusNote = note || adminReply || `Status changed to ${status}`;
@@ -1516,24 +1499,13 @@ export const api = {
 
     try {
       await updateDoc(doc(db, 'bookings', id), sanitizeForFirestore(updates));
-
-      // Save notifications to Firestore
-      try {
-        await Promise.all(
-          notifsToSave.map((n) =>
-            setDoc(doc(db, 'notifications', n.id), sanitizeForFirestore(n))
-          )
-        );
-      } catch (ne) {
-        console.warn('Firestore notification save fallback:', ne);
-      }
     } catch (e) {
       console.warn('Firestore updateBookingStatus fallback:', e);
     }
 
-    // Save notification to local storage
+    // Save notification purely in in-memory state & notify subscribers
     const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-    const updatedNotifs = [...notifsToSave, ...notifsList];
+    const updatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
     setLocalData(LOCAL_NOTIFS_KEY, updatedNotifs);
     notifyLocalSubscribers('notifications', updatedNotifs);
 
@@ -1895,24 +1867,14 @@ export const api = {
         console.warn('Error purging Firestore clients:', ce);
       }
 
-      // Purge Firestore notifications
-      try {
-        const notifSnap = await getDocs(collection(db, 'notifications'));
-        for (const docItem of notifSnap.docs) {
-          await deleteDoc(doc(db, 'notifications', docItem.id));
-        }
-      } catch (ne) {
-        console.warn('Error purging Firestore notifications:', ne);
-      }
-
-      // Clear local caches
+      // Clear in-memory & local caches
       localStorage.removeItem(LOCAL_CLIENTS_KEY);
       localStorage.removeItem(LOCAL_NOTIFS_KEY);
       localStorage.removeItem('baba_cleared_notif_ids_v1');
       notifyLocalSubscribers('clients', []);
       notifyLocalSubscribers('notifications', []);
 
-      return { success: true, message: 'Firestore clients and notifications purged successfully.' };
+      return { success: true, message: 'Clients and ephemeral notifications purged successfully.' };
     } catch (err: any) {
       return { success: false, message: err?.message || 'Purge failed' };
     }
@@ -2273,7 +2235,7 @@ export const api = {
       try {
         await setDoc(doc(db, 'clients', newId), newClient);
 
-        // Notify Admin of new registered client account
+        // In-memory ephemeral notification for new registered client account
         const notifId = `notif-${Date.now()}`;
         const newNotif: NotificationItem = {
           id: notifId,
@@ -2285,10 +2247,8 @@ export const api = {
           type: 'client_registered'
         };
 
-        await setDoc(doc(db, 'notifications', notifId), newNotif);
-
         const currentNotifs = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-        const updatedNotifs = [newNotif, ...currentNotifs];
+        const updatedNotifs = [newNotif, ...currentNotifs].slice(0, 50);
         setLocalData(LOCAL_NOTIFS_KEY, updatedNotifs);
         notifyLocalSubscribers('notifications', updatedNotifs);
       } catch (e) {
@@ -2772,19 +2732,15 @@ export const api = {
     return true;
   },
 
-  // --- Notifications API ---
-  async getNotifications(role: UserRole | 'all' = 'all'): Promise<NotificationItem[]> {
+  // --- Pure In-Memory Ephemeral Notifications API (0 Firestore Operations) ---
+  async getNotifications(role: UserRole | 'all' = 'all', options?: { barberId?: string; limitCount?: number }): Promise<NotificationItem[]> {
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') return items;
-      if (role === 'superadmin') {
-        // Superadmin receives 0 notifications as requested
-        return [];
-      }
-      if (role === 'admin') {
+      if (role === 'admin' || role === 'superadmin') {
         return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
       }
       if (role === 'barber') {
-        return items.filter(n => isNotificationForBarber(n));
+        return items.filter(n => isNotificationForBarber(n, options?.barberId));
       }
       if (role === 'user') {
         return items.filter(n => isNotificationForClient(n));
@@ -2793,47 +2749,24 @@ export const api = {
     };
 
     const localList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-    if (localList && localList.length > 0) {
-      localList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-      return filterByRole(localList);
-    }
-
-    try {
-      const q = query(collection(db, 'notifications'), orderBy('timestamp', 'desc'), limit(50));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
-        list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setLocalData(LOCAL_NOTIFS_KEY, list);
-        const filtered = filterByRole(list);
-        
-        return filtered;
-      }
-    } catch (e) {
-      console.warn('Firestore getNotifications fallback:', e);
-    }
     localList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    const filtered = filterByRole(localList);
-    return filtered;
+    return filterByRole(localList);
   },
 
-  subscribeToNotifications(role: UserRole | 'all', onUpdate: (notifications: NotificationItem[]) => void): () => void {
-    if (role === 'superadmin') {
-      onUpdate([]);
-      return () => {};
-    }
-
-    let initialLoad = true;
-
+  subscribeToNotifications(
+    role: UserRole | 'all',
+    onUpdate: (notifications: NotificationItem[]) => void,
+    options?: { barberId?: string; limitCount?: number }
+  ): () => void {
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') {
         return items;
       }
-      if (role === 'admin') {
+      if (role === 'admin' || role === 'superadmin') {
         return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
       }
       if (role === 'barber') {
-        return items.filter(n => isNotificationForBarber(n));
+        return items.filter(n => isNotificationForBarber(n, options?.barberId));
       }
       if (role === 'user') {
         return items.filter(n => isNotificationForClient(n));
@@ -2851,62 +2784,8 @@ export const api = {
     const cached = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     roleCallback(cached);
 
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      const q = query(collection(db, 'notifications'), orderBy('timestamp', 'desc'), limit(50));
-      unsubscribeFirestore = onSnapshot(
-        q,
-        (snap) => {
-          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
-          list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-          setLocalData(LOCAL_NOTIFS_KEY, list);
-
-          const filtered = filterByRole(list);
-          onUpdate(filtered);
-
-          if (!initialLoad) {
-            snap.docChanges().forEach((change) => {
-              if (change.type === 'added') {
-                const notif = { id: change.doc.id, ...change.doc.data() } as NotificationItem;
-                
-                // Only alert on recent notifications created in the last 3 minutes
-                const notifTime = new Date(notif.timestamp).getTime();
-                const isRecent = !isNaN(notifTime) && (Date.now() - notifTime) < 3 * 60 * 1000;
-
-                if (isRecent && !hasNotificationBeenAlerted(notif.id)) {
-                  let shouldAlert = false;
-                  if (role === 'admin') {
-                    shouldAlert = notif.forRole === 'admin' || (notif.forRole === 'all' && !notif.targetMemberTier && !notif.targetClientPhone);
-                  } else if (role === 'barber') {
-                    shouldAlert = isNotificationForBarber(notif);
-                  } else if (role === 'user') {
-                    shouldAlert = isNotificationForClient(notif);
-                  }
-
-                  if (shouldAlert) {
-                    markNotificationAsAlerted(notif.id);
-                    playAudioChime();
-                    sendLocalPushNotification(notif.title || '🔔 အသိပေးချက် အသစ်', notif.message);
-                  }
-                }
-              }
-            });
-          }
-          initialLoad = false;
-        },
-        (error) => {
-          console.warn('subscribeToNotifications error:', error);
-        }
-      );
-    } catch (e) {
-      console.warn('subscribeToNotifications setup error:', e);
-    }
-
     return () => {
       syncSet.delete(roleCallback);
-      try {
-        unsubscribeFirestore();
-      } catch {}
     };
   },
 
@@ -2932,16 +2811,18 @@ export const api = {
       ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
     };
 
-    try {
-      await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore(newNotif));
-    } catch (e) {
-      console.warn('Firestore createNotification fallback:', e);
-    }
-
+    // Store purely in in-memory / local storage cache (0 Firestore writes)
     const current = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-    const updated = [newNotif, ...current.filter(n => n.id !== notifId)];
+    const updated = [newNotif, ...current.filter(n => n.id !== notifId)].slice(0, 50);
     setLocalData(LOCAL_NOTIFS_KEY, updated);
     notifyLocalSubscribers('notifications', updated);
+
+    // Trigger in-app chime & push notification
+    if (!hasNotificationBeenAlerted(notifId)) {
+      markNotificationAsAlerted(notifId);
+      playAudioChime();
+      sendLocalPushNotification(newNotif.title, newNotif.message);
+    }
 
     return newNotif;
   },
@@ -2995,22 +2876,6 @@ export const api = {
     });
     setLocalData(LOCAL_NOTIFS_KEY, updated);
     notifyLocalSubscribers('notifications', updated);
-
-    try {
-      const snap = await getDocs(collection(db, 'notifications'));
-      for (const docSnap of snap.docs) {
-        const d = docSnap.data() as NotificationItem;
-        if (specificIds && specificIds.length > 0) {
-          if (specificIds.includes(docSnap.id) && !d.read) {
-            updateDoc(doc(db, 'notifications', docSnap.id), { read: true, readAt: nowIso }).catch(() => {});
-          }
-        } else if ((!role || d.forRole === role || d.forRole === 'all') && !d.read) {
-          updateDoc(doc(db, 'notifications', docSnap.id), { read: true, readAt: nowIso }).catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.warn('markNotificationsRead firestore fallback:', e);
-    }
   },
 
   /**
@@ -3020,30 +2885,17 @@ export const api = {
     const list = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     const now = Date.now();
     const fiveMinutesMs = 5 * 60 * 1000;
-    const expiredIds: string[] = [];
 
     const remaining = list.filter((n) => {
       if (!n.read) return true;
       const readTime = n.readAt ? new Date(n.readAt).getTime() : new Date(n.timestamp).getTime();
       const isExpired = !isNaN(readTime) && (now - readTime >= fiveMinutesMs);
-      if (isExpired) {
-        expiredIds.push(n.id);
-        return false;
-      }
-      return true;
+      return !isExpired;
     });
 
-    if (expiredIds.length > 0) {
+    if (remaining.length !== list.length) {
       setLocalData(LOCAL_NOTIFS_KEY, remaining);
       notifyLocalSubscribers('notifications', remaining);
-
-      try {
-        for (const id of expiredIds) {
-          deleteDoc(doc(db, 'notifications', id)).catch(() => {});
-        }
-      } catch (err) {
-        console.warn('purgeExpiredReadNotifications firestore fallback:', err);
-      }
     }
   },
 
@@ -3052,12 +2904,6 @@ export const api = {
     const updated = list.filter(n => n.id !== id);
     setLocalData(LOCAL_NOTIFS_KEY, updated);
     notifyLocalSubscribers('notifications', updated);
-
-    try {
-      await deleteDoc(doc(db, 'notifications', id));
-    } catch (e) {
-      console.warn('Firestore deleteNotification fallback:', e);
-    }
     return true;
   },
 
@@ -3076,22 +2922,6 @@ export const api = {
 
     setLocalData(LOCAL_NOTIFS_KEY, updated);
     notifyLocalSubscribers('notifications', updated);
-
-    try {
-      const snap = await getDocs(collection(db, 'notifications'));
-      for (const docSnap of snap.docs) {
-        const d = docSnap.data() as NotificationItem;
-        if (specificIds && specificIds.length > 0) {
-          if (specificIds.includes(docSnap.id)) {
-            deleteDoc(doc(db, 'notifications', docSnap.id)).catch(() => {});
-          }
-        } else if (!role || role === 'all' || d.forRole === role || d.forRole === 'all') {
-          deleteDoc(doc(db, 'notifications', docSnap.id)).catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.warn('Firestore clearAllNotifications fallback:', e);
-    }
     return true;
   },
 
@@ -3101,9 +2931,9 @@ export const api = {
     if (cachedStats) {
       return cachedStats;
     }
-    const bookings = await this.getBookings();
-    const services = await this.getServices();
-    const designers = await this.getDesigners();
+    const bookings = this.getCachedBookings();
+    const services = this.getCachedServices();
+    const designers = this.getCachedDesigners();
     const todayStr = new Date().toISOString().split('T')[0];
 
     return {
@@ -3269,20 +3099,11 @@ export const api = {
         }
       }
 
-      // 7. Notifications
+      // 7. Notifications (Pure In-Memory Ephemeral)
       if (Array.isArray(data.notifications)) {
         setLocalData(LOCAL_NOTIFS_KEY, data.notifications);
         notifyLocalSubscribers('notifications', data.notifications);
         restoredCounts.notifications = data.notifications.length;
-        for (const n of data.notifications) {
-          if (n.id) {
-            try {
-              await setDoc(doc(db, 'notifications', n.id), n);
-            } catch (err) {
-              console.warn('Firestore restore notifications warn:', err);
-            }
-          }
-        }
       }
 
       // 8. Expenses
@@ -3754,7 +3575,7 @@ export const api = {
     localStorage.removeItem(LOCAL_PROMOS_KEY);
 
     // Delete all documents from Firestore collections
-    const collectionsToWipe = ['bookings', 'notifications', 'clients', 'promos'];
+    const collectionsToWipe = ['bookings', 'clients', 'promos'];
     for (const colName of collectionsToWipe) {
       try {
         const snap = await getDocs(collection(db, colName));
@@ -3925,18 +3746,9 @@ export const api = {
         console.warn('Cloud sync settings notice:', err);
       }
 
-      // 10. Fetch genuine Notifications from Cloud
-      try {
-        const notifSnap = await getDocs(collection(db, 'notifications'));
-        if (!notifSnap.empty) {
-          const freshNotifs = notifSnap.docs.map(d => ({ id: d.id, ...d.data() } as NotificationItem));
-          setLocalData(LOCAL_NOTIFS_KEY, freshNotifs);
-          notifyLocalSubscribers('notifications', freshNotifs);
-          counts.notifications = freshNotifs.length;
-        }
-      } catch (err) {
-        console.warn('Cloud sync notifications notice:', err);
-      }
+      // 10. Notifications are pure in-memory ephemeral (0 Firestore Reads)
+      const cachedNotifs = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
+      counts.notifications = cachedNotifs.length;
 
       // 11. Fetch genuine Shop Expenses from Cloud
       try {

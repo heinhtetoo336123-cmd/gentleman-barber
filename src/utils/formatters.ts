@@ -57,6 +57,24 @@ export function parseTo24Hour(time12Str: string): string {
 }
 
 /**
+ * Format timestamp into relative time ago (e.g. "5m ago", "2h ago", "1d ago")
+ */
+export function formatTimeAgo(dateStr: string | number | undefined, lang: 'en' | 'my' = 'en'): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const now = Date.now();
+  const diffSec = Math.floor((now - date.getTime()) / 1000);
+  if (diffSec < 60) return lang === 'my' ? 'ခုနလေးတင်' : 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return lang === 'my' ? `${diffMin} မိနစ်အလို` : `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return lang === 'my' ? `${diffHour} နာရီအလို` : `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  return lang === 'my' ? `${diffDay} ရက်အလို` : `${diffDay}d ago`;
+}
+
+/**
  * Calculates dynamic Barber Rating based on:
  * Default 5.0 Stars + 50% weighted blend with customer ratings.
  * Formula: If customer ratings exist: (5.0 * 0.5) + (Average Customer Rating * 0.5) = (5.0 + AvgCustomerRating) / 2

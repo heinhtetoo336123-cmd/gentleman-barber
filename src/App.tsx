@@ -170,7 +170,7 @@ export default function App() {
     window.addEventListener('click', handleUserInteraction);
     window.addEventListener('touchstart', handleUserInteraction);
 
-    // Subscribe to real-time updates for Bookings, Notifications, Designers, Services, Clients, and Settings
+    // Subscribe to persistent real-time updates for Bookings, Designers, Services, Clients, and Settings (Once per app lifecycle)
     const unsubServices = api.subscribeToServices((updatedServices) => {
       setServices(updatedServices);
     });
@@ -192,27 +192,24 @@ export default function App() {
       setStats(api.getCachedStats());
     });
 
-    // Targeted real-time notifications
-    const unsubNotifs = api.subscribeToNotifications(role, (updatedNotifs) => {
-      setNotifications(updatedNotifs);
-    });
-
-    // Periodic maintenance for expired read notifications (only when active tab is visible)
-    const purgeInterval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        api.purgeExpiredReadNotifications().catch(() => {});
-      }
-    }, 10 * 60 * 1000);
-
     return () => {
       window.removeEventListener('click', handleUserInteraction);
       window.removeEventListener('touchstart', handleUserInteraction);
-      clearInterval(purgeInterval);
       unsubServices();
       unsubDesigners();
       unsubSettings();
       unsubClients();
       unsubBookings();
+    };
+  }, []);
+
+  // Dedicated reactive subscription for role-based notifications (0 Firestore Reads)
+  useEffect(() => {
+    const unsubNotifs = api.subscribeToNotifications(role, (updatedNotifs) => {
+      setNotifications(updatedNotifs);
+    });
+
+    return () => {
       unsubNotifs();
     };
   }, [role]);
@@ -259,27 +256,38 @@ export default function App() {
 
   const loadAllData = async () => {
     // 1. Immediately hydrate from cache (0ms instant display, zero loading delay)
-    setServices(api.getCachedServices());
-    setDesigners(api.getCachedDesigners());
-    setBookings(api.getCachedBookings());
-    setClients(api.getCachedClients());
-    setStats(api.getCachedStats());
+    const cServices = api.getCachedServices();
+    const cDesigners = api.getCachedDesigners();
+    const cBookings = api.getCachedBookings();
+    const cClients = api.getCachedClients();
     const cSettings = api.getCachedSettings();
-    if (cSettings) setShopSettings(cSettings);
     const cNotifs = api.getCachedNotifications(role);
+
+    setServices(cServices);
+    setDesigners(cDesigners);
+    setBookings(cBookings);
+    setClients(cClients);
+    setStats(api.getCachedStats());
+    if (cSettings) setShopSettings(cSettings);
     if (cNotifs && cNotifs.length > 0) setNotifications(cNotifs);
 
-    // 2. Refresh from network in background without blocking the UI
+    // 2. Only perform background network fetch if caches are completely empty (Cold start)
     try {
-      const storedBarberId = role === 'barber' ? (activeBarber?.id || localStorage.getItem('baba_active_barber_id') || undefined) : undefined;
-
-      api.getServices().then(sList => { if (sList && sList.length > 0) setServices(sList); }).catch(() => {});
-      api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
-      (role === 'barber' && storedBarberId ? api.getBookings({ designerId: storedBarberId }) : api.getBookings())
-        .then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
-      api.getNotifications(role).then(nList => { if (nList) setNotifications(nList); }).catch(() => {});
-      api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
-      api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
+      if (!cServices || cServices.length === 0) {
+        api.getServices().then(sList => { if (sList && sList.length > 0) setServices(sList); }).catch(() => {});
+      }
+      if (!cDesigners || cDesigners.length === 0) {
+        api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
+      }
+      if (!cBookings || cBookings.length === 0) {
+        api.getBookings({ limitCount: 50 }).then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
+      }
+      if (!cSettings) {
+        api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
+      }
+      if (!cClients || cClients.length === 0) {
+        api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
+      }
     } catch (err) {
       console.error('Background refresh error:', err);
     }
@@ -395,12 +403,12 @@ export default function App() {
   };
 
   const handleBookingSuccess = (_newBooking: Booking) => {
-    loadAllData();
+    // State is already updated via reactive subscription with 0 extra reads
+    setStats(api.getCachedStats());
   };
 
   const handleMarkAllNotifsRead = async () => {
     await api.markNotificationsRead(role);
-    loadAllData();
   };
 
   const t = translations[lang];

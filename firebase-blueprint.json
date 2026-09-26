@@ -121,22 +121,6 @@
         "shopAddress": { "type": "string" }
       }
     },
-    "notifications": {
-      "title": "Notifications",
-      "description": "User and admin notifications",
-      "type": "object",
-      "properties": {
-        "title": { "type": "string" },
-        "message": { "type": "string" },
-        "timestamp": { "type": "string" },
-        "read": { "type": "boolean" },
-        "type": { "type": "string" },
-        "bookingId": { "type": "string" },
-        "forRole": { "type": "string" },
-        "customerName": { "type": "string" },
-        "customerPhone": { "type": "string" }
-      }
-    },
     "audit_logs": {
       "title": "Audit Logs",
       "description": "Admin activity and staff audit logs",
@@ -241,10 +225,6 @@
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/settings" },
       "description": "Payment and social contact settings"
-    },
-    "/notifications/{notificationId}": {
-      "schema": { "$ref": "#/entities/notifications" },
-      "description": "User and admin notifications"
     },
     "/audit_logs/{logId}": {
       "schema": { "$ref": "#/entities/audit_logs" },

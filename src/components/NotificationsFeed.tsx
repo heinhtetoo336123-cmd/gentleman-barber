@@ -204,7 +204,6 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
       playSuccessChime();
       setSelectedIds(new Set());
       setIsSelectionMode(false);
-      if (onRefreshAll) await onRefreshAll();
     } catch (err) {
       console.error(err);
     }
@@ -225,7 +224,6 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
       if (selectedNotif && targetIds.includes(selectedNotif.id)) {
         setSelectedNotif(null);
       }
-      if (onRefreshAll) await onRefreshAll();
     } catch (err) {
       console.error(err);
     }
@@ -247,7 +245,7 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
       } catch {}
     }
 
-    const related = findRelatedBooking(item.bookingId);
+    const related = findRelatedBooking(item.bookingId, item);
 
     // Helper to verify that the notification itself is strictly a service completion notification
     const isCompletionNotificationItem = (n: NotificationItem): boolean => {
@@ -295,9 +293,56 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
     setSelectedNotif(item);
   };
 
-  const findRelatedBooking = (relatedId?: string): Booking | undefined => {
-    if (!relatedId) return undefined;
-    return bookings?.find((b) => b.id === relatedId || b.bookingCode === relatedId);
+  const findRelatedBooking = (relatedId?: string, item?: NotificationItem): Booking | undefined => {
+    if (relatedId) {
+      const found = bookings?.find((b) => b.id === relatedId || b.bookingCode === relatedId);
+      if (found) return found;
+    }
+    if (item) {
+      // 1. Check if booking code like WLK-1234 or wlk-1234 exists in title, message or ID
+      const fullText = `${item.title || ''} ${item.message || ''} ${item.id || ''}`;
+      const codeMatch = fullText.match(/WLK-[A-Za-z0-9_-]+/i);
+      if (codeMatch) {
+        const matchedCode = codeMatch[0].toUpperCase();
+        const found = bookings?.find((b) => b.bookingCode?.toUpperCase() === matchedCode || b.id.toLowerCase() === matchedCode.toLowerCase());
+        if (found) return found;
+      }
+
+      // 2. Check by designer and customer name
+      if (item.designerId && item.customerName) {
+        const found = bookings?.find((b) => b.designerId === item.designerId && b.customerName === item.customerName);
+        if (found) return found;
+      }
+
+      // 3. Resilient Fallback for Walk-in notifications: synthesize valid booking object so Rating button NEVER disappears
+      const isWalkin = item.title.includes('Walk-in') || item.message.includes('Walk-in') || item.id.includes('wlk');
+      if (isWalkin && (item.designerId || item.designerName)) {
+        return {
+          id: item.bookingId || item.id,
+          bookingCode: codeMatch ? codeMatch[0].toUpperCase() : 'WLK',
+          serviceId: 'srv-walkin',
+          serviceName: item.message.includes('"') ? (item.message.split('"')[1] || 'Walk-in Service') : 'Walk-in Service',
+          servicePrice: 0,
+          price: 0,
+          serviceDuration: 30,
+          designerId: item.designerId || 'unknown',
+          designerName: item.designerName || 'Stylist',
+          designerAvatar: '',
+          customerName: item.customerName || 'Walk-in Guest',
+          customerPhone: item.customerPhone || '',
+          customerEmail: '',
+          date: item.timestamp ? item.timestamp.split('T')[0] : new Date().toISOString().split('T')[0],
+          timeSlot: 'Walk-in',
+          status: 'completed',
+          paymentMethod: 'cash',
+          paymentStatus: 'verified',
+          isWalkin: true,
+          createdAt: item.timestamp,
+          updatedAt: item.timestamp
+        } as Booking;
+      }
+    }
+    return undefined;
   };
 
   const handleDeleteSingleNotification = async (e: React.MouseEvent | null, id: string) => {
@@ -307,7 +352,6 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
       refreshClearedList();
       await api.deleteNotification(id);
       if (selectedNotif?.id === id) setSelectedNotif(null);
-      if (onRefreshAll) await onRefreshAll();
     } catch (err) {
       console.error(err);
     }
@@ -465,7 +509,7 @@ export const NotificationsFeed: React.FC<NotificationsFeedProps> = ({
         <div className="space-y-2">
           <AnimatePresence initial={false}>
             {displayedNotifs.map((item) => {
-              const relatedBooking = findRelatedBooking(item.bookingId);
+              const relatedBooking = findRelatedBooking(item.bookingId, item);
               const isSelected = selectedIds.has(item.id);
 
               return (

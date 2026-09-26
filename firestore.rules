@@ -101,20 +101,7 @@ service cloud.firestore {
       allow delete: if isValidId(settingId);
     }
 
-    // 8. Notifications Collection
-    function isValidNotification(data) {
-      return (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
-             (!('message' in data) || (data.message is string && data.message.size() <= 1000));
-    }
-
-    match /notifications/{notificationId} {
-      allow get: if isValidId(notificationId);
-      allow list: if true;
-      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
-      allow delete: if isValidId(notificationId);
-    }
-
-    // 9. Audit Logs Collection
+    // 8. Audit Logs Collection
     function isValidAuditLog(data) {
       return (!('action' in data) || (data.action is string && data.action.size() <= 200)) &&
              (!('details' in data) || (data.details is string && data.details.size() <= 2000));

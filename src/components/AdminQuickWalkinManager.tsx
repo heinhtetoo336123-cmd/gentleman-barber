@@ -39,12 +39,14 @@ import {
   CalendarDays,
   Receipt,
   Save,
-  RotateCcw
+  RotateCcw,
+  Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { KnownClient } from './walkin/ClientCombobox';
 import { WalkinBackfillForm } from './walkin/WalkinBackfillForm';
 import { EditWalkinModal } from './walkin/EditWalkinModal';
+import { BarberRatingModal } from './BarberRatingModal';
 
 interface AdminQuickWalkinManagerProps {
   services: Service[];
@@ -90,6 +92,9 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
 
   // Quick Action Detail / Receipt Modal State
   const [activeBookingDetail, setActiveBookingDetail] = useState<Booking | null>(null);
+
+  // Barber Rating Modal State for Walk-ins
+  const [ratingBooking, setRatingBooking] = useState<Booking | null>(null);
 
   // Active Stylists List
   const activeDesignersList = useMemo(() => {
@@ -820,6 +825,24 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
                               {record.createdAt ? `Logged: ${new Date(record.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
                             </span>
                             <div className="flex items-center space-x-1.5">
+                              {/* Direct Barber Rating Button / Badge */}
+                              {record.rating ? (
+                                <span className="px-2 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-xs font-mono font-bold flex items-center space-x-1 shadow-2xs">
+                                  <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                                  <span>{record.rating}/5</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setRatingBooking(record)}
+                                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-mono font-bold flex items-center space-x-1 cursor-pointer transition-colors shadow-2xs"
+                                  title={lang === 'my' ? 'Barber Rating ပေးမည်' : 'Rate Barber'}
+                                >
+                                  <Star className="w-3.5 h-3.5 fill-white text-white" />
+                                  <span>{lang === 'my' ? 'Rating ပေးမည်' : 'Rate'}</span>
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => setActiveBookingDetail(record)}
                                 className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-xs font-mono font-bold flex items-center space-x-1 cursor-pointer transition-colors"
@@ -960,6 +983,26 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
                             </td>
 
                             <td className="p-3.5 text-right space-x-1">
+                              {/* Direct Barber Rating Button / Badge */}
+                              {record.rating ? (
+                                <span
+                                  className="inline-flex items-center space-x-0.5 px-1.5 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-lg text-[10px] font-bold font-mono align-middle shadow-2xs"
+                                  title={`Rated ${record.rating}/5 Stars`}
+                                >
+                                  <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-500" />
+                                  <span>{record.rating}★</span>
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setRatingBooking(record)}
+                                  className="p-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg cursor-pointer transition-colors shadow-2xs align-middle"
+                                  title={lang === 'my' ? 'Barber Rating ပေးမည်' : 'Rate Barber'}
+                                >
+                                  <Star className="w-3.5 h-3.5 fill-white text-white" />
+                                </button>
+                              )}
+
                               <button
                                 onClick={() => setActiveBookingDetail(record)}
                                 className="p-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg cursor-pointer transition-colors"
@@ -1128,6 +1171,28 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
                     <span className="text-stone-800 font-medium">{activeBookingDetail.notes}</span>
                   </div>
                 )}
+                <div className="flex justify-between py-1 border-b border-stone-100 items-center">
+                  <span className="text-stone-500">Barber Rating:</span>
+                  {activeBookingDetail.rating ? (
+                    <span className="font-mono font-bold text-amber-600 flex items-center space-x-1">
+                      <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                      <span>{activeBookingDetail.rating} / 5 Stars</span>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeBookingDetail;
+                        setActiveBookingDetail(null);
+                        setRatingBooking(target);
+                      }}
+                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-colors shadow-2xs"
+                    >
+                      <Star className="w-3 h-3 fill-white text-white" />
+                      <span>{lang === 'my' ? 'Rating ပေးမည်' : 'Rate Stylist'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Quick Status Buttons */}
@@ -1162,6 +1227,24 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
           </div>
         )}
       </AnimatePresence>
+
+      {/* 4. Direct Barber Rating Modal for Walk-in */}
+      <BarberRatingModal
+        isOpen={Boolean(ratingBooking)}
+        booking={ratingBooking}
+        role="admin"
+        lang={lang}
+        onClose={() => setRatingBooking(null)}
+        onSuccess={(_ratedBooking, rating) => {
+          showToast(
+            lang === 'my'
+              ? `Barber Rating ${rating}⭐️ ပေးပြီးပါပြီ (အောင်မြင်ပါသည်)`
+              : `Stylist rated ${rating}⭐️ successfully!`
+          );
+          setRatingBooking(null);
+          onRefresh();
+        }}
+      />
 
     </div>
   );
