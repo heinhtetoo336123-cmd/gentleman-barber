@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Service } from '../types';
 import { api } from '../api/client';
-import { formatPrice } from '../utils/formatters';
+import { formatPrice, sortServicesForClient } from '../utils/formatters';
 import { playNotificationChime, playSuccessChime } from '../utils/audio';
 import { uploadImageToStorage } from '../utils/imageCompressor';
 import { ImageCropModal } from './ImageCropModal';
@@ -109,11 +109,15 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [cropSourceUrl, setCropSourceUrl] = useState<string>('');
 
-  // Local state for immediate responsiveness
-  const [displayServices, setDisplayServices] = useState<Service[]>(services);
+  // Quick Reorder Mode
+  const [isReordering, setIsReordering] = useState(false);
+  const [reorderSaving, setReorderSaving] = useState(false);
+
+  // Local state for immediate responsiveness - always sorted by custom displayOrder
+  const [displayServices, setDisplayServices] = useState<Service[]>(() => sortServicesForClient(services));
 
   useEffect(() => {
-    setDisplayServices(services);
+    setDisplayServices(sortServicesForClient(services));
   }, [services]);
 
   // Form Fields
@@ -127,10 +131,6 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
   const [imageUrl, setImageUrl] = useState(PRESET_PHOTOS[0].url);
   const [popular, setPopular] = useState(false);
   const [active, setActive] = useState(true);
-
-  // Quick Reorder Mode
-  const [isReordering, setIsReordering] = useState(false);
-  const [reorderSaving, setReorderSaving] = useState(false);
 
   useEffect(() => {
     if (initialEditService) {
@@ -297,30 +297,36 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
   };
 
   const handleMoveService = async (serviceId: string, direction: 'up' | 'down') => {
-    const currentList = [...displayServices];
-    const idx = currentList.findIndex(s => s.id === serviceId);
-    if (idx === -1) return;
-    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= currentList.length) return;
+    if (reorderSaving) return;
 
-    const swapped = [...currentList];
-    const temp = swapped[idx];
-    swapped[idx] = swapped[targetIdx];
-    swapped[targetIdx] = temp;
+    let reorderedList: Service[] = [];
+    setDisplayServices((prev) => {
+      const idx = prev.findIndex((s) => s.id === serviceId);
+      if (idx === -1) return prev;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
 
-    // Immediately update orders
-    const reordered = swapped.map((s, i) => ({ ...s, displayOrder: i + 1 }));
-    setDisplayServices(reordered);
+      const swapped = [...prev];
+      const temp = swapped[idx];
+      swapped[idx] = swapped[targetIdx];
+      swapped[targetIdx] = temp;
 
+      reorderedList = swapped.map((s, i) => ({ ...s, displayOrder: i + 1 }));
+      return reorderedList;
+    });
+
+    if (reorderedList.length === 0) return;
+
+    setReorderSaving(true);
     try {
-      const orderedIds = reordered.map(s => s.id);
-      await api.reorderServices(orderedIds);
+      await api.reorderServices(reorderedList);
       playSuccessChime();
       showToast(`Client order updated: ${direction === 'up' ? 'Moved Up' : 'Moved Down'}`);
-      onRefresh();
     } catch (e) {
       console.error('Failed to update service order:', e);
       showToast('Error updating order');
+    } finally {
+      setReorderSaving(false);
     }
   };
 
@@ -453,7 +459,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                 <div className="flex items-center space-x-1 shrink-0">
                   <button
                     type="button"
-                    disabled={idx === 0}
+                    disabled={idx === 0 || reorderSaving}
                     onClick={() => handleMoveService(srv.id, 'up')}
                     className="p-1.5 rounded-lg bg-emerald-800 hover:bg-emerald-700 disabled:opacity-30 text-white cursor-pointer transition-colors"
                     title="Move Up"
@@ -462,7 +468,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                   </button>
                   <button
                     type="button"
-                    disabled={idx === displayServices.length - 1}
+                    disabled={idx === displayServices.length - 1 || reorderSaving}
                     onClick={() => handleMoveService(srv.id, 'down')}
                     className="p-1.5 rounded-lg bg-emerald-800 hover:bg-emerald-700 disabled:opacity-30 text-white cursor-pointer transition-colors"
                     title="Move Down"

@@ -191,10 +191,6 @@ export default function App() {
       setShopSettings(updatedSettings);
     });
 
-    const unsubClients = api.subscribeToClients((updatedClients) => {
-      setClients(updatedClients);
-    });
-
     const unsubBookings = api.subscribeToBookings((updatedBookings) => {
       setBookings(updatedBookings);
       setStats(api.getCachedStats());
@@ -206,10 +202,21 @@ export default function App() {
       unsubServices();
       unsubDesigners();
       unsubSettings();
-      unsubClients();
       unsubBookings();
     };
   }, []);
+
+  // Subscribe to clients list ONLY when authenticated as Admin or SuperAdmin (Saves 150 reads per client visitor)
+  useEffect(() => {
+    if (role === 'admin' || role === 'superadmin') {
+      const unsubClients = api.subscribeToClients((updatedClients) => {
+        setClients(updatedClients);
+      });
+      return () => {
+        unsubClients();
+      };
+    }
+  }, [role]);
 
   // Dedicated reactive subscription for role-based notifications (0 Firestore Reads)
   useEffect(() => {
@@ -293,7 +300,7 @@ export default function App() {
       if (!cSettings) {
         api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
       }
-      if (!cClients || cClients.length === 0) {
+      if ((role === 'admin' || role === 'superadmin') && (!cClients || cClients.length === 0)) {
         api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
       }
     } catch (err) {

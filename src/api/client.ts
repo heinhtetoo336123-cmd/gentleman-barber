@@ -8,6 +8,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
   query,
   where,
   runTransaction,
@@ -373,26 +374,46 @@ export const api = {
     return updated.find(s => s.id === id) || { ...current.find(s => s.id === id)!, ...cleanUpdates };
   },
 
-  async reorderServices(orderedIds: string[]): Promise<Service[]> {
+  async reorderServices(orderedListOrIds: Service[] | string[]): Promise<Service[]> {
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
-    const updated = current.map(s => {
-      const idx = orderedIds.indexOf(s.id);
-      return idx !== -1 ? { ...s, displayOrder: idx + 1 } : s;
-    });
-    const sorted = sortServicesForClient(updated);
-    setLocalData(LOCAL_SERVICES_KEY, sorted);
-    notifyLocalSubscribers('services', sorted);
+    let newOrderedServices: Service[] = [];
+
+    if (orderedListOrIds.length > 0 && typeof orderedListOrIds[0] === 'object') {
+      newOrderedServices = (orderedListOrIds as Service[]).map((s, idx) => ({
+        ...s,
+        displayOrder: idx + 1,
+      }));
+    } else {
+      const idList = orderedListOrIds as string[];
+      const map = new Map<string, Service>();
+      current.forEach(s => map.set(s.id, s));
+      idList.forEach((id, idx) => {
+        const item = map.get(id);
+        if (item) {
+          newOrderedServices.push({ ...item, displayOrder: idx + 1 });
+          map.delete(id);
+        }
+      });
+      // Append any unreferenced
+      Array.from(map.values()).forEach((s, idx) => {
+        newOrderedServices.push({ ...s, displayOrder: idList.length + idx + 1 });
+      });
+    }
+
+    setLocalData(LOCAL_SERVICES_KEY, newOrderedServices);
+    notifyLocalSubscribers('services', newOrderedServices);
 
     try {
-      for (let i = 0; i < orderedIds.length; i++) {
-        const sId = orderedIds[i];
-        await updateDoc(doc(db, 'services', sId), { displayOrder: i + 1 }).catch(() => {});
-      }
+      const batch = writeBatch(db);
+      newOrderedServices.forEach((s) => {
+        batch.update(doc(db, 'services', s.id), { displayOrder: s.displayOrder });
+      });
+      await batch.commit();
     } catch (e) {
       console.warn('Firestore reorderServices fallback:', e);
     }
 
-    return sorted;
+    return newOrderedServices;
   },
 
   async deleteService(id: string): Promise<boolean> {
@@ -420,7 +441,8 @@ export const api = {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
     if (current && current.length > 0) {
-      callback(current.filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id)));
+      const sorted = sortServicesForClient(current.filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id)));
+      callback(sorted);
     }
 
     // 2. Shared Firestore real-time snapshot
@@ -432,8 +454,10 @@ export const api = {
             .map(d => ({ id: d.id, ...d.data() } as Service))
             .filter(s => !deletedSet.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
 
-          setLocalData(LOCAL_SERVICES_KEY, firestoreList);
-          notifyLocalSubscribers('services', firestoreList);
+          // Strict sort according to custom admin displayOrder (Hair Cut first as default)
+          const sorted = sortServicesForClient(firestoreList);
+          setLocalData(LOCAL_SERVICES_KEY, sorted);
+          notifyLocalSubscribers('services', sorted);
         }
       }, (err) => console.warn('subscribeToServices error:', err));
     });
@@ -695,6 +719,23 @@ export const api = {
     const lockedSlots: string[] = [];
     const nowMs = Date.now();
 
+    // 1. Fast in-memory check from real-time cached bookings (0 Firestore Reads)
+    const localBookings = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    if (localBookings && localBookings.length > 0) {
+      localBookings.forEach((b) => {
+        if (b.designerId === designerId && b.date === date) {
+          if (['pending', 'confirmed', 'in-progress', 'completed'].includes(b.status)) {
+            lockedSlots.push(b.timeSlot);
+          } else if (b.status === 'held' && b.holdExpiresAt) {
+            if (new Date(b.holdExpiresAt).getTime() > nowMs) {
+              lockedSlots.push(b.timeSlot);
+            }
+          }
+        }
+      });
+      return Array.from(new Set(lockedSlots));
+    }
+
     try {
       const q = query(
         collection(db, 'bookings'),
@@ -720,20 +761,6 @@ export const api = {
     } catch (e) {
       console.warn('Firestore getLockedSlots fallback to local:', e);
     }
-
-    // Fallback to local data
-    const localBookings = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    localBookings.forEach((b) => {
-      if (b.designerId === designerId && b.date === date) {
-        if (['pending', 'confirmed', 'in-progress', 'completed'].includes(b.status)) {
-          lockedSlots.push(b.timeSlot);
-        } else if (b.status === 'held' && b.holdExpiresAt) {
-          if (new Date(b.holdExpiresAt).getTime() > nowMs) {
-            lockedSlots.push(b.timeSlot);
-          }
-        }
-      }
-    });
 
     return Array.from(new Set(lockedSlots));
   },
@@ -809,8 +836,8 @@ export const api = {
   }): Promise<Booking[]> {
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     
-    // Serve from cache first if available
-    if (cached && cached.length > 0 && !options?.limitCount) {
+    // Serve from cache first if available (prevents repeated full database scans)
+    if (cached && cached.length > 0) {
       let filtered = cached;
       if (options?.designerId) {
         filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
@@ -823,6 +850,9 @@ export const api = {
       }
       if (options?.status) {
         filtered = filtered.filter(b => b.status === options.status);
+      }
+      if (options?.limitCount) {
+        filtered = filtered.slice(0, options.limitCount);
       }
       return sortBookingsMostRecentFirst(filtered);
     }
@@ -877,9 +907,8 @@ export const api = {
 
     // 2. Attach or share the single active Firestore onSnapshot listener
     const releaseListener = retainSharedListener('bookings', () => {
-      const q = collection(db, 'bookings');
       return onSnapshot(
-        q,
+        collection(db, 'bookings'),
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
@@ -2623,73 +2652,9 @@ export const api = {
     };
   },
 
-  // --- Audit Logs API ---
+  // --- Audit Log Management (Local-Only - 0 Firestore Reads & 0 Firestore Writes) ---
   async getAuditLogs(): Promise<AuditLog[]> {
-    const cached = getLocalData<AuditLog[] | null>(LOCAL_LOGS_KEY, null);
-    if (cached && cached.length > 0) {
-      return [...cached].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    }
-
-    const seedLogs: AuditLog[] = [
-      {
-        id: 'log-seed-1',
-        adminName: 'SuperAdmin Master',
-        actorRole: 'superadmin',
-        action: 'System Initialized',
-        actionType: 'system',
-        details: 'GENTLEMAN Barber & Grooming Lounge system and real-time database active.',
-        timestamp: new Date(Date.now() - 3600000 * 24).toISOString(),
-      },
-      {
-        id: 'log-seed-2',
-        adminName: 'Admin Manager (Ko Min)',
-        actorRole: 'admin',
-        action: 'Booking Approved',
-        actionType: 'booking',
-        details: 'Approved booking GTM-8921 for client Aung Aung with Master Barber Kyaw Gyi.',
-        timestamp: new Date(Date.now() - 3600000 * 5).toISOString(),
-      },
-      {
-        id: 'log-seed-3',
-        adminName: 'Kyaw Gyi (Barber)',
-        actorRole: 'barber',
-        action: 'Barber PIN Verified',
-        actionType: 'auth',
-        details: 'Barber Kyaw Gyi logged into personal stylist workspace via PIN.',
-        timestamp: new Date(Date.now() - 3600000 * 3).toISOString(),
-      },
-      {
-        id: 'log-seed-4',
-        adminName: 'Admin Manager',
-        actorRole: 'admin',
-        action: 'Walk-in Registered',
-        actionType: 'booking',
-        details: 'Walk-in client registered and assigned to Barber Min Khant.',
-        timestamp: new Date(Date.now() - 3600000 * 1).toISOString(),
-      },
-      {
-        id: 'log-seed-5',
-        adminName: 'SuperAdmin Master',
-        actorRole: 'superadmin',
-        action: 'Financial Ledger Verified',
-        actionType: 'financial',
-        details: 'Verified daily barber commission split and payment accounts.',
-        timestamp: new Date().toISOString(),
-      },
-    ];
-
-    try {
-      const snap = await getDocs(collection(db, 'audit_logs'));
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as AuditLog));
-        list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        setLocalData(LOCAL_LOGS_KEY, list);
-        return list;
-      }
-    } catch (e) {
-      console.warn('Firestore getAuditLogs fallback:', e);
-    }
-    const local = getLocalData<AuditLog[]>(LOCAL_LOGS_KEY, seedLogs);
+    const local = getLocalData<AuditLog[]>(LOCAL_LOGS_KEY, []);
     local.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     return local;
   },
@@ -2714,27 +2679,14 @@ export const api = {
       timestamp: new Date().toISOString(),
     };
 
-    try {
-      await setDoc(doc(db, 'audit_logs', logId), sanitizeForFirestore(newLog));
-    } catch (e) {
-      console.warn('Firestore addAuditLog fallback:', e);
-    }
-
+    // Stored solely in local device memory to ensure 0 Firestore writes
     const current = getLocalData<AuditLog[]>(LOCAL_LOGS_KEY, []);
-    const updated = [newLog, ...current];
+    const updated = [newLog, ...current].slice(0, 50);
     setLocalData(LOCAL_LOGS_KEY, updated);
     return newLog;
   },
 
   async clearAuditLogs(): Promise<boolean> {
-    try {
-      const snap = await getDocs(collection(db, 'audit_logs'));
-      for (const d of snap.docs) {
-        await deleteDoc(doc(db, 'audit_logs', d.id));
-      }
-    } catch (e) {
-      console.warn('Firestore clearAuditLogs fallback:', e);
-    }
     setLocalData(LOCAL_LOGS_KEY, []);
     return true;
   },

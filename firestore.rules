@@ -108,10 +108,7 @@ service cloud.firestore {
     }
 
     match /audit_logs/{logId} {
-      allow get: if isValidId(logId);
-      allow list: if true;
-      allow create, update: if isValidId(logId) && isValidAuditLog(incoming());
-      allow delete: if isValidId(logId);
+      allow read, write: if false;
     }
 
     // 10. Expenses Collections (shop_expenses & expenses)
