@@ -35,6 +35,38 @@
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@300;400;500;600;700;800&family=Padauk:wght@400;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
     </noscript>
     <script>
+      // 1. Emergency PWA Cache & Chunk Load Error Auto-Recovery
+      window.addEventListener('error', function(e) {
+        var msg = (e && e.message) ? String(e.message).toLowerCase() : '';
+        var isChunkError = msg.includes('loading chunk') || 
+                           msg.includes('unexpected token') || 
+                           msg.includes('dynamically imported module') || 
+                           msg.includes('failed to fetch') ||
+                           msg.includes('mime type');
+        var isScriptLoadError = e && e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK');
+        
+        if (isChunkError || isScriptLoadError) {
+          console.warn('⚠️ Asset/Script load error detected. Performing automatic PWA cache purge & reload:', e);
+          var lastPurge = Number(sessionStorage.getItem('__sw_purged_time') || 0);
+          if (Date.now() - lastPurge > 15000) {
+            sessionStorage.setItem('__sw_purged_time', String(Date.now()));
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                for (var i = 0; i < regs.length; i++) regs[i].unregister();
+              });
+            }
+            if ('caches' in window) {
+              caches.keys().then(function(keys) {
+                for (var j = 0; j < keys.length; j++) caches.delete(keys[j]);
+              });
+            }
+            setTimeout(function() {
+              window.location.reload();
+            }, 300);
+          }
+        }
+      }, true);
+
       // Clean up legacy cached round logos from localStorage so new GTM icon is always used
       try {
         const savedLogo = localStorage.getItem('gentleman_shop_logo');
@@ -47,6 +79,32 @@
       document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
       document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
       document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+
+      // 2. Failsafe Rescue: If React doesn't mount in 4 seconds, show interactive rescue button
+      setTimeout(function() {
+        var splash = document.getElementById('app-init-splash');
+        if (splash) {
+          var rescueBox = document.getElementById('splash-rescue-box');
+          if (rescueBox) rescueBox.style.display = 'flex';
+        }
+      }, 4000);
+
+      window.triggerEmergencyCacheClear = function() {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            for (var i = 0; i < regs.length; i++) regs[i].unregister();
+          });
+        }
+        if ('caches' in window) {
+          caches.keys().then(function(keys) {
+            for (var j = 0; j < keys.length; j++) caches.delete(keys[j]);
+          });
+        }
+        sessionStorage.clear();
+        setTimeout(function() {
+          window.location.reload();
+        }, 200);
+      };
     </script>
   </head>
   <body class="bg-[#FAFAFA] text-[#18181B] antialiased overflow-x-hidden selection:bg-[#10B981] selection:text-white">
@@ -103,6 +161,13 @@
             <span style="font-size: 12px; color: #71717A; letter-spacing: 0.04em; font-weight: 500;">
               ခေတ္တစောင့်ဆိုင်းပေးပါ • Loading Experience...
             </span>
+          </div>
+
+          <!-- Interactive Failsafe Rescue Option (Appears if slow or cached) -->
+          <div id="splash-rescue-box" style="display: none; margin-top: 14px; flex-direction: column; align-items: center; gap: 8px;">
+            <button onclick="window.triggerEmergencyCacheClear()" style="background: #18181B; color: #FFFFFF; border: none; padding: 8px 16px; border-radius: 999px; font-size: 11px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+              🔄 ဒေတာအသစ် ပြန်ဖွင့်ရန် (Clear Cache & Reload)
+            </button>
           </div>
         </div>
       </div>

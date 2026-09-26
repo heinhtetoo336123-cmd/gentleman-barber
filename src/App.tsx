@@ -98,6 +98,14 @@ export default function App() {
 
   // Check saved session & language on load and setup subscriptions
   useEffect(() => {
+    // Dismiss app initial splash screen smoothly once React has mounted
+    const splash = document.getElementById('app-init-splash');
+    if (splash) {
+      splash.style.opacity = '0';
+      splash.style.transition = 'opacity 0.2s ease-out';
+      setTimeout(() => splash.remove(), 200);
+    }
+
     // Language preference (Default to 'en')
     const savedLang = localStorage.getItem('baba_lang') as Language;
     if (savedLang === 'en' || savedLang === 'my') {

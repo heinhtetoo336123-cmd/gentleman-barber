@@ -1,11 +1,9 @@
 // Service Worker for GENTLEMEN Barber Lounge PWA, Auto-Updates & Web Push
-const SW_VERSION = 'v4.1.0';
+const SW_VERSION = 'v4.3.0';
 const CACHE_NAME = `gentlemen-cache-${SW_VERSION}`;
 
-// Precache essential static assets
+// Precache essential static assets (exclude html/root to prevent stale html caching)
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/favicon.ico',
   '/icon-192.png',
@@ -35,7 +33,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     Promise.all([
-      // Clean up older cache buckets from previous versions
+      // Clean up ALL older cache buckets from previous versions immediately
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cache) => {
@@ -53,8 +51,8 @@ self.addEventListener('activate', (event) => {
 });
 
 // Fetch Strategy:
-// 1. For HTML/Navigation requests -> Network-First (ensures published updates load immediately)
-// 2. For other assets (JS/CSS/Images) -> Stale-While-Revalidate with fallback
+// 1. For HTML/Navigation requests -> Always Network First, fallback to cached index.html only if completely offline
+// 2. For static assets (JS/CSS) -> Cache First with strict MIME validation to prevent HTML poisoning
 self.addEventListener('fetch', (event) => {
   const request = event.request;
 
@@ -73,7 +71,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML Navigation Requests -> Network First, fallback to cache
+  // HTML Navigation Requests -> Network First (fresh server version), fallback to cache only if network fails
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
       fetch(request)
@@ -89,20 +87,43 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static Assets -> Stale While Revalidate
+  // Static Assets (JS / CSS / Images)
+  const isJs = url.pathname.endsWith('.js');
+  const isCss = url.pathname.endsWith('.css');
+
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
-      const fetchPromise = fetch(request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
-          }
-          return networkResponse;
-        })
-        .catch(() => cachedResponse);
+      // Strict MIME verification: If cached response is text/html for a JS/CSS file, discard corrupted cache!
+      if (cachedResponse) {
+        const ct = cachedResponse.headers.get('content-type') || '';
+        if (isJs && !ct.includes('javascript')) {
+          caches.open(CACHE_NAME).then((c) => c.delete(request));
+          cachedResponse = null;
+        } else if (isCss && !ct.includes('css')) {
+          caches.open(CACHE_NAME).then((c) => c.delete(request));
+          cachedResponse = null;
+        }
+      }
 
-      return cachedResponse || fetchPromise;
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
+      return fetch(request).then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200) {
+          const ct = networkResponse.headers.get('content-type') || '';
+          // NEVER cache HTML responses for .js or .css files (which happens when SPA rewrites 404 to index.html)
+          if (isJs && !ct.includes('javascript')) {
+            return networkResponse;
+          }
+          if (isCss && !ct.includes('css')) {
+            return networkResponse;
+          }
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+        }
+        return networkResponse;
+      });
     })
   );
 });
