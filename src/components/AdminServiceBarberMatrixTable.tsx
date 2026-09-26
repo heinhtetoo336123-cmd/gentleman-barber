@@ -352,7 +352,14 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
     filteredBookings.forEach((b) => {
       if (b.status !== 'completed') return;
-      const net = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
+      let rawGross = 0;
+      if (b.servicesList && b.servicesList.length > 0) {
+        rawGross = b.servicesList.reduce((sum, s) => sum + (s.servicePrice || 0), 0);
+      }
+      if (!rawGross || rawGross <= 0) {
+        rawGross = b.servicePrice || b.price || 0;
+      }
+      const net = Math.max(0, rawGross - (b.discountAmount || 0));
       servicesTotal += net;
 
       const pMethod = (b.paymentMethod || 'cash').toLowerCase();

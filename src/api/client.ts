@@ -828,10 +828,7 @@ export const api = {
     }
 
     try {
-      const q = options?.limitCount
-        ? query(collection(db, 'bookings'), limit(options.limitCount))
-        : collection(db, 'bookings');
-      const snap = await getDocs(q);
+      const snap = await getDocs(collection(db, 'bookings'));
       if (!snap.empty) {
         const list = sortBookingsMostRecentFirst(
           snap.docs
@@ -1145,6 +1142,10 @@ export const api = {
       const allUpdatedNotifs = [clientNotif, barberNotif, adminNotif, ...notifsList].slice(0, 50);
       setLocalData(LOCAL_NOTIFS_KEY, allUpdatedNotifs);
       notifyLocalSubscribers('notifications', allUpdatedNotifs);
+
+      // Dispatch to cross-device cloud queue so Admin and Barber get it in real-time on other devices
+      this.dispatchCrossDeviceNotification(adminNotif).catch(() => {});
+      this.dispatchCrossDeviceNotification(barberNotif).catch(() => {});
     } catch (e) {
       console.warn('Firestore createBooking fallback:', e);
     }
@@ -1316,6 +1317,9 @@ export const api = {
       const allUpdatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
       setLocalData(LOCAL_NOTIFS_KEY, allUpdatedNotifs);
       notifyLocalSubscribers('notifications', allUpdatedNotifs);
+
+      // Dispatch to cross-device cloud queue so Barber/Client get it in real-time on other devices
+      notifsToSave.forEach(n => this.dispatchCrossDeviceNotification(n).catch(() => {}));
     } catch (e) {
       console.warn('Firestore createWalkinBooking fallback:', e);
     }
@@ -1503,11 +1507,14 @@ export const api = {
       console.warn('Firestore updateBookingStatus fallback:', e);
     }
 
-    // Save notification purely in in-memory state & notify subscribers
+    // Save notification in local state & notify subscribers
     const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     const updatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
     setLocalData(LOCAL_NOTIFS_KEY, updatedNotifs);
     notifyLocalSubscribers('notifications', updatedNotifs);
+
+    // Dispatch to cross-device cloud queue (e.g. Admin walkin completion rating notification)
+    notifsToSave.forEach(n => this.dispatchCrossDeviceNotification(n).catch(() => {}));
 
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     const updated = current.map(b => (b.id === id ? { ...b, ...updates } : b));
@@ -2732,11 +2739,23 @@ export const api = {
     return true;
   },
 
-  // --- Pure In-Memory Ephemeral Notifications API (0 Firestore Operations) ---
+  // --- Ephemeral Real-time Cross-Device Notifications Queue (Consume & Clear) ---
+  async dispatchCrossDeviceNotification(notif: NotificationItem): Promise<void> {
+    try {
+      await setDoc(doc(db, 'notifications', notif.id), sanitizeForFirestore({
+        ...notif,
+        timestamp: notif.timestamp || new Date().toISOString(),
+      }));
+    } catch (e) {
+      console.warn('dispatchCrossDeviceNotification fallback:', e);
+    }
+  },
+
   async getNotifications(role: UserRole | 'all' = 'all', options?: { barberId?: string; limitCount?: number }): Promise<NotificationItem[]> {
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') return items;
-      if (role === 'admin' || role === 'superadmin') {
+      if (role === 'superadmin') return [];
+      if (role === 'admin') {
         return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
       }
       if (role === 'barber') {
@@ -2758,11 +2777,16 @@ export const api = {
     onUpdate: (notifications: NotificationItem[]) => void,
     options?: { barberId?: string; limitCount?: number }
   ): () => void {
+    if (role === 'superadmin') {
+      onUpdate([]);
+      return () => {};
+    }
+
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') {
         return items;
       }
-      if (role === 'admin' || role === 'superadmin') {
+      if (role === 'admin') {
         return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
       }
       if (role === 'barber') {
@@ -2784,8 +2808,93 @@ export const api = {
     const cached = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     roleCallback(cached);
 
+    // Ephemeral Real-Time Cross-Device Relay Queue
+    // Listens with a tight limit (20 docs max).
+    // When a message is delivered to this device's local store, it is immediately deleted from Firestore
+    // ("ပို့စရာရှိတာပို့ပြီး ဖျက်အောင်") so cloud read count NEVER accumulates and stays near 0.
+    let unsubFirestore: (() => void) | null = null;
+    try {
+      const notifsQuery = query(collection(db, 'notifications'), limit(20));
+
+      unsubFirestore = onSnapshot(notifsQuery, (snap) => {
+        if (snap.empty) return;
+        const nowMs = Date.now();
+        const currentLocal = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
+        const localIdSet = new Set(currentLocal.map(n => n.id));
+        let hasNew = false;
+        const newIncoming: NotificationItem[] = [];
+
+        snap.docs.forEach((d) => {
+          const data = d.data() as Partial<NotificationItem>;
+          const notifId = d.id;
+
+          // 1. Auto-cleanup: if older than 24 hours, delete from cloud immediately
+          const createdTime = data.timestamp ? new Date(data.timestamp).getTime() : 0;
+          if (createdTime && (nowMs - createdTime > 24 * 60 * 60 * 1000)) {
+            deleteDoc(doc(db, 'notifications', notifId)).catch(() => {});
+            return;
+          }
+
+          // 2. Build full item
+          const item: NotificationItem = {
+            id: notifId,
+            title: data.title || '🔔 အသိပေးချက်',
+            message: data.message || '',
+            timestamp: data.timestamp || new Date().toISOString(),
+            read: data.read ?? false,
+            type: data.type || 'broadcast',
+            forRole: data.forRole || 'all',
+            bookingId: data.bookingId,
+            customerName: data.customerName,
+            customerPhone: data.customerPhone,
+            targetClientPhone: data.targetClientPhone,
+            targetClientId: data.targetClientId,
+            targetMemberTier: data.targetMemberTier,
+            designerId: data.designerId,
+            designerName: data.designerName,
+            imageUrl: data.imageUrl,
+          };
+
+          // 3. Check if relevant to this client/role
+          const matches = filterByRole([item]);
+          if (matches.length > 0) {
+            // Is it new to this device?
+            if (!localIdSet.has(notifId)) {
+              newIncoming.push(item);
+              localIdSet.add(notifId);
+              hasNew = true;
+
+              // Sound and local push
+              if (!hasNotificationBeenAlerted(notifId)) {
+                markNotificationAsAlerted(notifId);
+                playAudioChime();
+                sendLocalPushNotification(item.title, item.message);
+              }
+            }
+
+            // CONSUME & CLEAR: User directive: "ပို့စရာရှိတာပို့ပြီး ဖျက်အောင်"
+            // Once received by the target role, delete the document from Firestore cloud so read count NEVER accumulates
+            deleteDoc(doc(db, 'notifications', notifId)).catch(() => {});
+          }
+        });
+
+        if (hasNew && newIncoming.length > 0) {
+          const merged = [...newIncoming, ...currentLocal].slice(0, 60);
+          setLocalData(LOCAL_NOTIFS_KEY, merged);
+          notifyLocalSubscribers('notifications', merged);
+        }
+      }, (err) => {
+        console.warn('Notifications real-time listener error:', err);
+      });
+    } catch (e) {
+      console.warn('Firestore notifications subscription setup error:', e);
+    }
+
     return () => {
       syncSet.delete(roleCallback);
+      if (unsubFirestore) {
+        unsubFirestore();
+      }
     };
   },
 
@@ -2811,11 +2920,14 @@ export const api = {
       ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
     };
 
-    // Store purely in in-memory / local storage cache (0 Firestore writes)
+    // Store in local storage cache
     const current = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     const updated = [newNotif, ...current.filter(n => n.id !== notifId)].slice(0, 50);
     setLocalData(LOCAL_NOTIFS_KEY, updated);
     notifyLocalSubscribers('notifications', updated);
+
+    // Dispatch to cloud queue so other devices receive it across devices and auto-clear it
+    this.dispatchCrossDeviceNotification(newNotif).catch(() => {});
 
     // Trigger in-app chime & push notification
     if (!hasNotificationBeenAlerted(notifId)) {

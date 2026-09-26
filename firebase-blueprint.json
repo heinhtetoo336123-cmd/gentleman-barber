@@ -199,9 +199,32 @@
         "paymentMethod": { "type": "string" }
       },
       "required": ["productName", "totalPrice", "date"]
+    },
+    "notifications": {
+      "title": "Notifications",
+      "description": "Ephemeral cross-device real-time notification relay queue",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "read": { "type": "boolean" },
+        "type": { "type": "string" },
+        "forRole": { "type": "string" },
+        "bookingId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "designerId": { "type": "string" },
+        "designerName": { "type": "string" }
+      },
+      "required": ["title", "message", "timestamp"]
     }
   },
   "firestore": {
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/notifications" },
+      "description": "Real-time cross-device notifications dispatch queue"
+    },
     "/bookings/{bookingId}": {
       "schema": { "$ref": "#/entities/bookings" },
       "description": "Barber shop appointments and time-slot holds"

@@ -186,7 +186,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // 15. Test / Health Check Connection
+    // 15. Notifications Collection (Ephemeral Cross-Device Relay Queue)
+    function isValidNotification(data) {
+      return (!('title' in data) || (data.title is string && data.title.size() <= 200)) &&
+             (!('message' in data) || (data.message is string && data.message.size() <= 1000));
+    }
+
+    match /notifications/{notificationId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(notificationId) && isValidNotification(incoming());
+      allow delete: if isValidId(notificationId);
+    }
+
+    // 16. Test / Health Check Connection
     match /test/{testId} {
       allow read: if true;
     }

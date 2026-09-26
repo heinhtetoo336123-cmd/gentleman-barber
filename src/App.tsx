@@ -280,7 +280,7 @@ export default function App() {
         api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
       }
       if (!cBookings || cBookings.length === 0) {
-        api.getBookings({ limitCount: 50 }).then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
+        api.getBookings().then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
       }
       if (!cSettings) {
         api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
