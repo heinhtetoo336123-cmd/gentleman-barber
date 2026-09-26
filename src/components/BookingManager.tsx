@@ -53,6 +53,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>('');
+  const [sortMode, setSortMode] = useState<'timeline_recent' | 'booked_recent'>('timeline_recent');
 
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [viewingSlipUrl, setViewingSlipUrl] = useState<string | null>(null);
@@ -231,8 +232,8 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
     }
   };
 
-  const filteredBookings = sortBookingsMostRecentFirst(
-    bookings.filter((b) => {
+  const filteredBookings = React.useMemo(() => {
+    const list = bookings.filter((b) => {
       const matchesStatus = statusFilter === 'all' || b.status === statusFilter;
       const matchesDate = !selectedDate || b.date === selectedDate;
       const matchesSearch =
@@ -243,8 +244,20 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
         b.customerPhone.toLowerCase().includes(searchTerm.toLowerCase());
 
       return matchesStatus && matchesDate && matchesSearch;
-    })
-  );
+    });
+
+    if (sortMode === 'booked_recent') {
+      return [...list].sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (timeA !== timeB) return timeB - timeA;
+        return sortBookingsMostRecentFirst([a, b])[0] === a ? -1 : 1;
+      });
+    }
+
+    // Default: 'timeline_recent' (Strictly sorted by Most Recent Appointment Timeline)
+    return sortBookingsMostRecentFirst(list);
+  }, [bookings, statusFilter, selectedDate, searchTerm, sortMode]);
 
   const pendingCount = bookings.filter((b) => b.status === 'pending').length;
 
@@ -320,6 +333,47 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
                 ✕
               </button>
             )}
+          </div>
+        </div>
+
+        {/* Sort Order & Info Toolbar */}
+        <div className="flex items-center justify-between pt-1.5 border-t border-stone-100 flex-wrap gap-2 text-xs">
+          <div className="flex items-center space-x-1.5 text-stone-500 font-mono text-[11px] flex-wrap gap-y-1">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            <span className="font-bold text-stone-900">
+              {filteredBookings.length} {filteredBookings.length === 1 ? 'Booking' : 'Bookings'}
+            </span>
+            <span>•</span>
+            <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+              ⚡ Most Recent First (အသစ်ဆုံး အရင် Timeline)
+            </span>
+          </div>
+
+          <div className="flex items-center space-x-1 bg-stone-100 p-0.5 rounded-xl border border-stone-200">
+            <button
+              type="button"
+              onClick={() => setSortMode('timeline_recent')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                sortMode === 'timeline_recent'
+                  ? 'bg-stone-950 text-white shadow-2xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+              title="Sort by appointment date & time (Latest appointment first)"
+            >
+              📅 Timeline Order
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortMode('booked_recent')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+                sortMode === 'booked_recent'
+                  ? 'bg-stone-950 text-white shadow-2xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+              title="Sort by booking submission time (Latest created first)"
+            >
+              ⏱️ Booked Time
+            </button>
           </div>
         </div>
       </div>

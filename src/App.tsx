@@ -38,15 +38,40 @@ import {
 } from 'lucide-react';
 
 export default function App() {
-  // Gate screen state: user chooses between admin, barber and user before app start
-  const [hasSelectedPortal, setHasSelectedPortal] = useState<boolean>(false);
-  const [role, setRole] = useState<UserRole>('user');
-  const [activeBarber, setActiveBarber] = useState<Designer | null>(null);
+  // Synchronous session check on boot (renders portal immediately on Frame 0 with 0ms delay)
+  const initialSession = (() => {
+    if (typeof window === 'undefined') return { role: 'user' as UserRole, hasPortal: false, tab: 'explore', barber: null as Designer | null };
+    const adminSess = localStorage.getItem('baba_admin_session');
+    if (adminSess) {
+      const dec = decryptSessionData(adminSess);
+      if (dec && (dec.role === 'admin' || dec.role === 'superadmin')) {
+        return { role: dec.role as UserRole, hasPortal: true, tab: 'admin-dashboard', barber: null };
+      }
+    }
+    const barberSess = localStorage.getItem('baba_barber_session');
+    if (barberSess) {
+      let barberObj = null;
+      try {
+        const cachedObj = localStorage.getItem('baba_active_barber_obj');
+        if (cachedObj) barberObj = JSON.parse(cachedObj);
+      } catch {}
+      return { role: 'barber' as UserRole, hasPortal: true, tab: 'timeline', barber: barberObj };
+    }
+    return { role: 'user' as UserRole, hasPortal: false, tab: 'explore', barber: null };
+  })();
+
+  const [hasSelectedPortal, setHasSelectedPortal] = useState<boolean>(initialSession.hasPortal);
+  const [role, setRole] = useState<UserRole>(initialSession.role);
+  const [activeBarber, setActiveBarber] = useState<Designer | null>(initialSession.barber);
   
   // Default English as requested
-  const [lang, setLang] = useState<Language>('en');
+  const [lang, setLang] = useState<Language>(() => {
+    if (typeof window === 'undefined') return 'en';
+    const s = localStorage.getItem('baba_lang');
+    return s === 'my' || s === 'en' ? (s as Language) : 'en';
+  });
 
-  const [activeTab, setActiveTab] = useState<string>('explore'); // 'explore' | 'designers' | 'my-bookings' | 'admin-dashboard' | 'barber-portal'
+  const [activeTab, setActiveTab] = useState<string>(initialSession.tab);
   const [adminSubTab, setAdminSubTab] = useState<AdminSection>('hub');
 
   // App Data (Loaded synchronously from local cache so Frame 0 renders instant data with 0ms delay and zero 0-flashes)
@@ -54,7 +79,7 @@ export default function App() {
   const [designers, setDesigners] = useState<Designer[]>(() => api.getCachedDesigners());
   const [bookings, setBookings] = useState<Booking[]>(() => api.getCachedBookings());
   const [clients, setClients] = useState<UserProfile[]>(() => api.getCachedClients());
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => api.getCachedNotifications(initialSession.role));
   const [stats, setStats] = useState<AppStats | null>(() => api.getCachedStats());
   const [shopSettings, setShopSettings] = useState<PaymentSettings | null>(() => api.getCachedSettings());
 
@@ -145,15 +170,6 @@ export default function App() {
     window.addEventListener('click', handleUserInteraction);
     window.addEventListener('touchstart', handleUserInteraction);
 
-    // Purge stale local cache from installed apps to guarantee immediate 267 bookings full sync
-    try {
-      const storedVersion = localStorage.getItem('baba_app_version');
-      if (storedVersion !== 'v3.5.0') {
-        localStorage.removeItem('baba_bookings');
-        localStorage.setItem('baba_app_version', 'v3.5.0');
-      }
-    } catch {}
-
     // Subscribe to real-time updates for Bookings, Notifications, Designers, Services, Clients, and Settings
     const unsubServices = api.subscribeToServices((updatedServices) => {
       setServices(updatedServices);
@@ -173,16 +189,13 @@ export default function App() {
 
     const unsubBookings = api.subscribeToBookings((updatedBookings) => {
       setBookings(updatedBookings);
-      api.getStats().then(setStats).catch(() => {});
+      setStats(api.getCachedStats());
     });
 
     // Targeted real-time notifications
     const unsubNotifs = api.subscribeToNotifications(role, (updatedNotifs) => {
       setNotifications(updatedNotifs);
     });
-
-    // Immediate initial fetch to ensure zero blank screen on mobile / cold starts
-    loadAllData().catch(() => {});
 
     // Periodic maintenance for expired read notifications (only when active tab is visible)
     const purgeInterval = setInterval(() => {
@@ -245,32 +258,30 @@ export default function App() {
   }, [role, designers]);
 
   const loadAllData = async () => {
+    // 1. Immediately hydrate from cache (0ms instant display, zero loading delay)
+    setServices(api.getCachedServices());
+    setDesigners(api.getCachedDesigners());
+    setBookings(api.getCachedBookings());
+    setClients(api.getCachedClients());
+    setStats(api.getCachedStats());
+    const cSettings = api.getCachedSettings();
+    if (cSettings) setShopSettings(cSettings);
+    const cNotifs = api.getCachedNotifications(role);
+    if (cNotifs && cNotifs.length > 0) setNotifications(cNotifs);
+
+    // 2. Refresh from network in background without blocking the UI
     try {
       const storedBarberId = role === 'barber' ? (activeBarber?.id || localStorage.getItem('baba_active_barber_id') || undefined) : undefined;
-      const bookingsPromise = role === 'barber' && storedBarberId
-        ? api.getBookings({ designerId: storedBarberId })
-        : api.getBookings();
 
-      const [sList, dList, bList, nList, st, setts, cList] = await Promise.all([
-        api.getServices(),
-        api.getDesigners(),
-        bookingsPromise,
-        api.getNotifications(role),
-        api.getStats(),
-        api.getSettings(),
-        api.getClients(),
-      ]);
-      setServices(sList);
-      setDesigners(dList);
-      setBookings(bList);
-      setNotifications(nList);
-      setStats(st);
-      setShopSettings(setts);
-      if (cList && cList.length > 0) {
-        setClients(cList);
-      }
+      api.getServices().then(sList => { if (sList && sList.length > 0) setServices(sList); }).catch(() => {});
+      api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
+      (role === 'barber' && storedBarberId ? api.getBookings({ designerId: storedBarberId }) : api.getBookings())
+        .then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
+      api.getNotifications(role).then(nList => { if (nList) setNotifications(nList); }).catch(() => {});
+      api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
+      api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
     } catch (err) {
-      console.error('Data load error:', err);
+      console.error('Background refresh error:', err);
     }
   };
 
@@ -292,7 +303,6 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
-    loadAllData();
   };
 
   const handleEnterAsSuperAdmin = () => {
@@ -301,7 +311,6 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
-    loadAllData();
   };
 
   const handleEnterAsBarber = (barber: Designer) => {
@@ -313,7 +322,6 @@ export default function App() {
     localStorage.setItem('baba_active_barber_obj', JSON.stringify(barber));
     setHasSelectedPortal(true);
     setActiveTab('timeline');
-    loadAllData();
   };
 
   const handleTabChange = (tabId: string) => {

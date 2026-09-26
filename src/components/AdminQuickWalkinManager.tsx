@@ -82,6 +82,9 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   // Edit Walk-in Record Modal State
   const [editingRecord, setEditingRecord] = useState<Booking | null>(null);
 
+  // View Mode: Timeline View vs Table View (Defaults to Timeline Most Recent First)
+  const [historyViewMode, setHistoryViewMode] = useState<'timeline' | 'table'>('timeline');
+
   // Delete Record Confirmation State
   const [recordToDelete, setRecordToDelete] = useState<Booking | null>(null);
 
@@ -169,6 +172,67 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     });
   }, [bookings, clients]);
 
+  // Helper to extract a precise timestamp for timeline sorting (Most Recent First)
+  const getWalkinChronologicalTimestamp = (b: Booking): number => {
+    try {
+      const rawDate = (b.date || '').replace(/\//g, '-').split('T')[0];
+      if (rawDate) {
+        const slot = (b.timeSlot || '12:00').split('-')[0].trim();
+        let h = 12;
+        let m = 0;
+        const isPM = /pm/i.test(slot);
+        const isAM = /am/i.test(slot);
+        const clean = slot.replace(/(am|pm)/gi, '').trim();
+        const parts = clean.split(':');
+        if (parts.length >= 2) {
+          h = parseInt(parts[0], 10) || 0;
+          m = parseInt(parts[1], 10) || 0;
+          if (isPM && h < 12) h += 12;
+          if (isAM && h === 12) h = 0;
+        }
+        const d = new Date(`${rawDate}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
+        const timeMs = d.getTime();
+        if (!isNaN(timeMs)) return timeMs;
+      }
+    } catch {}
+
+    if (b.createdAt) {
+      const t = new Date(b.createdAt).getTime();
+      if (!isNaN(t)) return t;
+    }
+    if (b.updatedAt) {
+      const t = new Date(b.updatedAt).getTime();
+      if (!isNaN(t)) return t;
+    }
+    return 0;
+  };
+
+  const compareWalkinsMostRecentFirst = (a: Booking, b: Booking): number => {
+    // 1. Appointment Date descending (Today & upcoming dates first)
+    const rawDateA = (a.date || '').replace(/\//g, '-').split('T')[0];
+    const rawDateB = (b.date || '').replace(/\//g, '-').split('T')[0];
+    if (rawDateA !== rawDateB) {
+      return rawDateB.localeCompare(rawDateA);
+    }
+
+    // 2. Appointment Time slot descending (latest time slot of the day first)
+    const timeA = getWalkinChronologicalTimestamp(a);
+    const timeB = getWalkinChronologicalTimestamp(b);
+    if (timeA !== timeB) {
+      return timeB - timeA;
+    }
+
+    // 3. Created At timestamp descending (newest registered record first)
+    const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (createdA !== createdB) {
+      return createdB - createdA;
+    }
+
+    // 4. Booking code / ID descending
+    return (b.bookingCode || b.id || '').localeCompare(a.bookingCode || a.id || '');
+  };
+
   // All Walk-in Bookings across the entire dataset (Latest First)
   const allWalkinBookings = useMemo(() => {
     return (bookings || [])
@@ -179,13 +243,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
           (b.notes && /walk-?in|ဆိုင်ရောက်/i.test(b.notes)) ||
           (b.customerName && /walk-?in|ဧည့်သည်/i.test(b.customerName))
       )
-      .sort((a, b) => {
-        const dA = (a.date || '').split('T')[0];
-        const dB = (b.date || '').split('T')[0];
-        const dateComp = dB.localeCompare(dA);
-        if (dateComp !== 0) return dateComp;
-        return (b.timeSlot || '').localeCompare(a.timeSlot || '');
-      });
+      .sort(compareWalkinsMostRecentFirst);
   }, [bookings]);
 
   // Toast Helper
@@ -380,7 +438,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
       if (historyPaymentFilter !== 'all' && rec.paymentMethod !== historyPaymentFilter) return false;
 
       return true;
-    });
+    }).sort(compareWalkinsMostRecentFirst);
   }, [
     allWalkinBookings,
     searchQuery,
@@ -477,16 +535,47 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
 
       {/* SECTION 2: RECORDS & HISTORY LEDGER */}
       <div className="space-y-4 pt-2">
-        {/* Section Title */}
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center space-x-2">
-            <div className="w-2 h-2 rounded-full bg-stone-900" />
+        {/* Section Title & View Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-1">
+          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
             <h3 className="text-xs font-black text-stone-950 uppercase font-mono tracking-wider">
-              {lang === 'my' ? 'Walk-in မှတ်တမ်းစာရင်း & POS စာရင်းချုပ်' : 'Walk-in History & Ledger'}
+              {lang === 'my' ? 'Walk-in အချိန်ဇယား & မှတ်တမ်းစာရင်း' : 'Walk-in Timeline & History'}
             </h3>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-stone-100 text-stone-700 border border-stone-200">
               {allWalkinBookings.length} records
             </span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center space-x-1">
+              <span>⚡</span>
+              <span>{lang === 'my' ? 'အသစ်ဆုံး အရင် (Most Recent First)' : 'Most Recent First'}</span>
+            </span>
+          </div>
+
+          {/* View Mode Toggle: Timeline vs Table */}
+          <div className="flex items-center bg-stone-100 p-1 rounded-2xl border border-stone-200 self-start sm:self-auto">
+            <button
+              onClick={() => setHistoryViewMode('timeline')}
+              className={`flex items-center space-x-1.5 px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
+                historyViewMode === 'timeline'
+                  ? 'bg-stone-950 text-white shadow-xs'
+                  : 'text-stone-600 hover:text-stone-950 hover:bg-stone-200/60'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>{lang === 'my' ? 'Timeline ပုံစံ' : 'Timeline'}</span>
+            </button>
+
+            <button
+              onClick={() => setHistoryViewMode('table')}
+              className={`flex items-center space-x-1.5 px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer ${
+                historyViewMode === 'table'
+                  ? 'bg-stone-950 text-white shadow-xs'
+                  : 'text-stone-600 hover:text-stone-950 hover:bg-stone-200/60'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{lang === 'my' ? 'Table ဇယား' : 'Table'}</span>
+            </button>
           </div>
         </div>
           {/* Filter Bar */}
@@ -590,148 +679,320 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
             </div>
           </div>
 
-          {/* Records Table / Cards */}
-          <div className="bg-white border border-stone-200 rounded-3xl shadow-xs overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-emerald-950 text-white font-mono text-[11px] uppercase tracking-wider">
-                    <th className="p-3.5">Code / Date</th>
-                    <th className="p-3.5">Customer / Contact</th>
-                    <th className="p-3.5">Stylist & Service</th>
-                    <th className="p-3.5">Price & Comm</th>
-                    <th className="p-3.5">Payment</th>
-                    <th className="p-3.5">Status</th>
-                    <th className="p-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-200 font-sans">
-                  {filteredHistoryRecords.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="p-8 text-center text-stone-400 font-mono">
-                        {lang === 'my'
-                          ? 'ရှာဖွေမှုနှင့် ကိုက်ညီသော Walk-in မှတ်တမ်း မရှိပါ'
-                          : 'No walk-in records match the current filter.'}
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredHistoryRecords.map((record) => {
-                      const net = Math.max(0, (record.servicePrice || 0) - (record.discountAmount || 0));
-                      const comm = record.commissionAmount || Math.round(net * 0.5);
+          {/* Records: Timeline View vs Table View */}
+          {historyViewMode === 'timeline' ? (
+            <div className="space-y-4">
+              {filteredHistoryRecords.length === 0 ? (
+                <div className="bg-white border border-stone-200 rounded-3xl p-12 text-center text-stone-400 font-mono">
+                  {lang === 'my'
+                    ? 'ရှာဖွေမှုနှင့် ကိုက်ညီသော Walk-in မှတ်တမ်း မရှိပါ'
+                    : 'No walk-in records match the current filter.'}
+                </div>
+              ) : (
+                <div className="relative pl-6 sm:pl-8 space-y-4 before:absolute before:left-3 sm:before:left-4 before:top-3 before:bottom-3 before:w-0.5 before:bg-stone-200">
+                  {filteredHistoryRecords.map((record) => {
+                    const net = Math.max(0, (record.servicePrice || 0) - (record.discountAmount || 0));
+                    const comm = record.commissionAmount || Math.round(net * 0.5);
+                    const isCompleted = record.status === 'completed';
+                    const isCancelled = record.status === 'cancelled';
 
-                      return (
-                        <tr key={record.id} className="hover:bg-emerald-50/40 transition-colors">
-                          <td className="p-3.5 font-mono">
-                            <span className="font-bold text-stone-950 block">{record.bookingCode}</span>
-                            <span className="text-[11px] text-stone-500 block">{record.date} • {record.timeSlot}</span>
-                          </td>
+                    return (
+                      <div key={record.id} className="relative group">
+                        {/* Timeline Node Icon */}
+                        <div
+                          className={`absolute -left-6 sm:-left-8 top-3.5 w-6 h-6 rounded-full border-2 flex items-center justify-center shadow-xs transition-transform group-hover:scale-110 ${
+                            isCompleted
+                              ? 'bg-emerald-600 border-white text-white ring-4 ring-emerald-100'
+                              : isCancelled
+                              ? 'bg-rose-600 border-white text-white ring-4 ring-rose-100'
+                              : 'bg-stone-900 border-white text-white ring-4 ring-stone-100'
+                          }`}
+                        >
+                          {isCompleted ? (
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          ) : isCancelled ? (
+                            <X className="w-3.5 h-3.5" />
+                          ) : (
+                            <Clock className="w-3.5 h-3.5" />
+                          )}
+                        </div>
 
-                          <td className="p-3.5">
-                            <span className="font-bold text-stone-900 block">{record.customerName}</span>
-                            <span className="text-[11px] text-stone-500 font-mono block">
-                              {record.customerPhone || 'No Phone (Walk-in)'}
-                            </span>
-                            {record.notes && (
-                              <span className="text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-1 inline-block truncate max-w-[180px]">
-                                {record.notes}
+                        {/* Timeline Card */}
+                        <div className="bg-white border border-stone-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition-all space-y-3">
+                          {/* Header: Date & Time + Code + Status */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2.5">
+                            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                              <span className="px-2.5 py-1 bg-stone-950 text-white font-mono text-xs font-black rounded-xl">
+                                📅 {record.date} • ⏰ {record.timeSlot}
                               </span>
-                            )}
-                          </td>
-
-                          <td className="p-3.5">
-                            <span className="font-bold text-stone-900 block">{record.designerName}</span>
-                            <span className="text-[11px] text-stone-700 font-medium block">{record.serviceName}</span>
-                            {record.servicesList && record.servicesList.length > 1 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {record.servicesList.map((s, idx) => (
-                                  <span key={idx} className="text-[9px] font-mono bg-emerald-50 text-emerald-900 px-1.5 py-0.2 rounded border border-emerald-200">
-                                    • {s.serviceName} ({formatPrice(s.servicePrice)})
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {record.retailItems && record.retailItems.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1.5">
-                                {record.retailItems.map((prod, idx) => (
-                                  <span key={idx} className="text-[9px] font-mono bg-emerald-700 text-white font-bold px-1.5 py-0.5 rounded-md shadow-2xs flex items-center space-x-1">
-                                    <span>🛍️ {prod.quantity}x {prod.productName}</span>
-                                    <span>({formatPrice(prod.totalPrice)})</span>
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </td>
-
-                          <td className="p-3.5 font-mono">
-                            <div className="font-bold text-stone-900">{formatPrice(net)}</div>
-                            {record.discountAmount && record.discountAmount > 0 ? (
-                              <span className="text-[10px] text-rose-500 block">
-                                Disc: -{formatPrice(record.discountAmount)}
+                              <span className="px-2 py-0.5 rounded-lg text-xs font-mono font-bold bg-stone-100 text-stone-800 border border-stone-200">
+                                {record.bookingCode}
                               </span>
-                            ) : null}
-                            <span className="text-[10px] text-emerald-700 font-bold block">
-                              Comm: {formatPrice(comm)}
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                                  record.paymentMethod === 'cash' || record.paymentMethod === 'pay_at_shop'
+                                    ? 'bg-emerald-100 text-emerald-900'
+                                    : 'bg-blue-100 text-blue-900'
+                                }`}
+                              >
+                                {record.paymentMethod || 'cash'}
+                              </span>
+                              <span className="text-[10px] text-stone-400 font-mono">
+                                ({record.paymentStatus || 'verified'})
+                              </span>
+                            </div>
+
+                            <div className="flex items-center space-x-1.5">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                                  isCompleted
+                                    ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                    : isCancelled
+                                    ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                    : 'bg-blue-100 text-blue-900 border-blue-300'
+                                }`}
+                              >
+                                {record.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Body: Customer & Stylist Info */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center space-x-2">
+                                <span className="font-extrabold text-stone-950 text-sm">
+                                  {record.customerName || 'Walk-in Guest'}
+                                </span>
+                                <span className="text-xs text-stone-500 font-mono">
+                                  {record.customerPhone ? `📞 ${record.customerPhone}` : '(No Phone)'}
+                                </span>
+                              </div>
+                              <div className="text-xs text-stone-700 flex items-center space-x-1.5 font-medium">
+                                <span className="text-stone-400">✂️ Stylist:</span>
+                                <span className="font-bold text-stone-900">{record.designerName || 'Unassigned'}</span>
+                              </div>
+                              <div className="text-xs text-stone-600 font-medium">
+                                <span>💇 {record.serviceName}</span>
+                              </div>
+                              {record.notes && (
+                                <p className="text-[11px] text-emerald-900 bg-emerald-50/80 px-2.5 py-1 rounded-lg border border-emerald-200/60 inline-block mt-1">
+                                  💬 {record.notes}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="space-y-1.5 sm:text-right">
+                              <div className="text-sm font-black font-mono text-stone-950">
+                                {formatPrice(net)}
+                              </div>
+                              {record.discountAmount && record.discountAmount > 0 ? (
+                                <div className="text-[11px] font-mono text-rose-500">
+                                  Discount: -{formatPrice(record.discountAmount)}
+                                </div>
+                              ) : null}
+                              <div className="text-[11px] font-mono text-emerald-700 font-bold">
+                                Stylist Comm: {formatPrice(comm)}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Multi-services or Retail Products list if any */}
+                          {((record.servicesList && record.servicesList.length > 1) || (record.retailItems && record.retailItems.length > 0)) && (
+                            <div className="pt-2 border-t border-stone-100 flex flex-wrap gap-1.5">
+                              {record.servicesList && record.servicesList.length > 1 && record.servicesList.map((s, idx) => (
+                                <span key={idx} className="text-[10px] font-mono bg-stone-100 text-stone-800 px-2 py-0.5 rounded-md border border-stone-200">
+                                  ✂️ {s.serviceName} ({formatPrice(s.servicePrice)})
+                                </span>
+                              ))}
+                              {record.retailItems?.map((prod, idx) => (
+                                <span key={idx} className="text-[10px] font-mono bg-emerald-700 text-white font-bold px-2 py-0.5 rounded-md flex items-center space-x-1 shadow-2xs">
+                                  <span>🛍️ {prod.quantity}x {prod.productName}</span>
+                                  <span>({formatPrice(prod.totalPrice)})</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Actions Bar */}
+                          <div className="flex items-center justify-between pt-2 border-t border-stone-100">
+                            <span className="text-[10px] font-mono text-stone-400">
+                              {record.createdAt ? `Logged: ${new Date(record.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
                             </span>
-                          </td>
-
-                          <td className="p-3.5">
-                            <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
-                              record.paymentMethod === 'cash' || record.paymentMethod === 'pay_at_shop'
-                                ? 'bg-emerald-100 text-emerald-900'
-                                : 'bg-blue-100 text-blue-900'
-                            }`}>
-                              <span>{record.paymentMethod || 'cash'}</span>
-                            </span>
-                            <span className="block text-[10px] text-stone-400 font-mono mt-0.5">
-                              {record.paymentStatus || 'verified'}
-                            </span>
-                          </td>
-
-                          <td className="p-3.5">
-                            <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase ${
-                              record.status === 'completed'
-                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-                                : record.status === 'cancelled'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-blue-100 text-blue-900'
-                            }`}>
-                              {record.status}
-                            </span>
-                          </td>
-
-                          <td className="p-3.5 text-right space-x-1">
-                            <button
-                              onClick={() => setActiveBookingDetail(record)}
-                              className="p-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg cursor-pointer transition-colors"
-                              title="View Details"
-                            >
-                              <Receipt className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={() => setEditingRecord(record)}
-                              className="p-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg cursor-pointer transition-colors"
-                              title="Edit Record"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-
-                            <button
-                              onClick={() => setRecordToDelete(record)}
-                              className="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-lg cursor-pointer transition-colors"
-                              title="Delete Record"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                            <div className="flex items-center space-x-1.5">
+                              <button
+                                onClick={() => setActiveBookingDetail(record)}
+                                className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-xs font-mono font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                                <span>Receipt</span>
+                              </button>
+                              <button
+                                onClick={() => setEditingRecord(record)}
+                                className="px-2.5 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg text-xs font-mono font-bold flex items-center space-x-1 cursor-pointer transition-colors"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Edit</span>
+                              </button>
+                              <button
+                                onClick={() => setRecordToDelete(record)}
+                                className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-mono cursor-pointer transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </div>
+          ) : (
+            /* Records Table / Cards */
+            <div className="bg-white border border-stone-200 rounded-3xl shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-emerald-950 text-white font-mono text-[11px] uppercase tracking-wider">
+                      <th className="p-3.5">Code / Date</th>
+                      <th className="p-3.5">Customer / Contact</th>
+                      <th className="p-3.5">Stylist & Service</th>
+                      <th className="p-3.5">Price & Comm</th>
+                      <th className="p-3.5">Payment</th>
+                      <th className="p-3.5">Status</th>
+                      <th className="p-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-200 font-sans">
+                    {filteredHistoryRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-stone-400 font-mono">
+                          {lang === 'my'
+                            ? 'ရှာဖွေမှုနှင့် ကိုက်ညီသော Walk-in မှတ်တမ်း မရှိပါ'
+                            : 'No walk-in records match the current filter.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredHistoryRecords.map((record) => {
+                        const net = Math.max(0, (record.servicePrice || 0) - (record.discountAmount || 0));
+                        const comm = record.commissionAmount || Math.round(net * 0.5);
+
+                        return (
+                          <tr key={record.id} className="hover:bg-emerald-50/40 transition-colors">
+                            <td className="p-3.5 font-mono">
+                              <span className="font-bold text-stone-950 block">{record.bookingCode}</span>
+                              <span className="text-[11px] text-stone-500 block">{record.date} • {record.timeSlot}</span>
+                            </td>
+
+                            <td className="p-3.5">
+                              <span className="font-bold text-stone-900 block">{record.customerName}</span>
+                              <span className="text-[11px] text-stone-500 font-mono block">
+                                {record.customerPhone || 'No Phone (Walk-in)'}
+                              </span>
+                              {record.notes && (
+                                <span className="text-[10px] text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 mt-1 inline-block truncate max-w-[180px]">
+                                  {record.notes}
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="p-3.5">
+                              <span className="font-bold text-stone-900 block">{record.designerName}</span>
+                              <span className="text-[11px] text-stone-700 font-medium block">{record.serviceName}</span>
+                              {record.servicesList && record.servicesList.length > 1 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {record.servicesList.map((s, idx) => (
+                                    <span key={idx} className="text-[9px] font-mono bg-emerald-50 text-emerald-900 px-1.5 py-0.2 rounded border border-emerald-200">
+                                      • {s.serviceName} ({formatPrice(s.servicePrice)})
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {record.retailItems && record.retailItems.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                  {record.retailItems.map((prod, idx) => (
+                                    <span key={idx} className="text-[9px] font-mono bg-emerald-700 text-white font-bold px-1.5 py-0.5 rounded-md shadow-2xs flex items-center space-x-1">
+                                      <span>🛍️ {prod.quantity}x {prod.productName}</span>
+                                      <span>({formatPrice(prod.totalPrice)})</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+
+                            <td className="p-3.5 font-mono">
+                              <div className="font-bold text-stone-900">{formatPrice(net)}</div>
+                              {record.discountAmount && record.discountAmount > 0 ? (
+                                <span className="text-[10px] text-rose-500 block">
+                                  Disc: -{formatPrice(record.discountAmount)}
+                                </span>
+                              ) : null}
+                              <span className="text-[10px] text-emerald-700 font-bold block">
+                                Comm: {formatPrice(comm)}
+                              </span>
+                            </td>
+
+                            <td className="p-3.5">
+                              <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                                record.paymentMethod === 'cash' || record.paymentMethod === 'pay_at_shop'
+                                  ? 'bg-emerald-100 text-emerald-900'
+                                  : 'bg-blue-100 text-blue-900'
+                              }`}>
+                                <span>{record.paymentMethod || 'cash'}</span>
+                              </span>
+                              <span className="block text-[10px] text-stone-400 font-mono mt-0.5">
+                                {record.paymentStatus || 'verified'}
+                              </span>
+                            </td>
+
+                            <td className="p-3.5">
+                              <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase ${
+                                record.status === 'completed'
+                                  ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                                  : record.status === 'cancelled'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : 'bg-blue-100 text-blue-900'
+                              }`}>
+                                {record.status}
+                              </span>
+                            </td>
+
+                            <td className="p-3.5 text-right space-x-1">
+                              <button
+                                onClick={() => setActiveBookingDetail(record)}
+                                className="p-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-lg cursor-pointer transition-colors"
+                                title="View Details"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={() => setEditingRecord(record)}
+                                className="p-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg cursor-pointer transition-colors"
+                                title="Edit Record"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={() => setRecordToDelete(record)}
+                                className="p-1.5 bg-rose-100 hover:bg-rose-200 text-rose-900 rounded-lg cursor-pointer transition-colors"
+                                title="Delete Record"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
 
       {/* ========================================================================= */}

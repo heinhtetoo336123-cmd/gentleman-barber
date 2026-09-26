@@ -34,6 +34,7 @@ import { verifyAdminResetPassword, decryptSessionData } from '../lib/authCrypto'
 const LOCAL_SERVICES_KEY = 'babashop_services_v2';
 const LOCAL_DESIGNERS_KEY = 'babashop_designers_v2';
 const LOCAL_BOOKINGS_KEY = 'babashop_bookings_v2';
+const LOCAL_BOOKINGS_LAST_SYNC_KEY = 'babashop_bookings_last_sync_v2';
 const LOCAL_NOTIFS_KEY = 'babashop_notifs_v2';
 const LOCAL_SETTINGS_KEY = 'babashop_settings_v2';
 const LOCAL_CLIENTS_KEY = 'babashop_clients_v2';
@@ -48,19 +49,14 @@ const LOCAL_DELETED_SRV_KEY = 'babashop_deleted_srv_ids_v2';
 const LOCAL_DELETED_CLIENTS_KEY = 'babashop_deleted_clients_ids_v2';
 
 /**
- * Clean up legacy bloated collections and prevent QuotaExceededError crashes
+ * Clean up legacy old v1 collections and temporary store
  */
 export function purgeBloatedStorage() {
   try {
     if (typeof window === 'undefined' || !window.localStorage) return;
-    const bloatedKeys = [
-      LOCAL_BOOKINGS_KEY,
-      LOCAL_LOGS_KEY,
-      LOCAL_EXPENSES_KEY,
-      LOCAL_RETAIL_SALES_KEY,
+    const legacyKeys = [
       'babashop_debug_logs',
       'babashop_cached_analytics',
-      'babashop_audit_logs',
       'babashop_logs',
       'babashop_temp_store',
       'babashop_services_v1',
@@ -68,7 +64,7 @@ export function purgeBloatedStorage() {
       'babashop_bookings_v1',
       'babashop_notifs_v1'
     ];
-    bloatedKeys.forEach(k => {
+    legacyKeys.forEach(k => {
       try { localStorage.removeItem(k); } catch {}
     });
   } catch {}
@@ -142,6 +138,39 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
   } catch (err) {
     console.warn('BroadcastChannel initialization fallback:', err);
   }
+}
+
+// Shared Firestore Snapshot Listeners Pool with Reference Counting
+interface SharedListenerHandle {
+  unsubscribe: () => void;
+  refCount: number;
+}
+const sharedFirestoreListeners = new Map<string, SharedListenerHandle>();
+
+function retainSharedListener(key: string, attachFn: () => () => void): () => void {
+  const existing = sharedFirestoreListeners.get(key);
+  if (existing) {
+    existing.refCount += 1;
+  } else {
+    try {
+      const unsub = attachFn();
+      sharedFirestoreListeners.set(key, { unsubscribe: unsub, refCount: 1 });
+    } catch (e) {
+      console.warn(`Error attaching shared Firestore listener for ${key}:`, e);
+    }
+  }
+
+  return () => {
+    const handle = sharedFirestoreListeners.get(key);
+    if (!handle) return;
+    handle.refCount -= 1;
+    if (handle.refCount <= 0) {
+      try {
+        handle.unsubscribe();
+      } catch {}
+      sharedFirestoreListeners.delete(key);
+    }
+  };
 }
 
 // Window Storage Event Listener (fallback for browsers where BroadcastChannel is blocked or sandboxed)
@@ -256,9 +285,13 @@ function purgeMockServicesFromFirestore() {
 export const api = {
   // --- Services API ---
   async getServices(): Promise<Service[]> {
+    const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
+    const cached = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []).filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
+    if (cached.length > 0) {
+      return sortServicesForClient(cached);
+    }
     try {
       purgeMockServicesFromFirestore();
-      const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
       const snap = await getDocs(collection(db, 'services'));
       if (!snap.empty) {
         const firestoreList = snap.docs
@@ -268,19 +301,11 @@ export const api = {
         const sorted = sortServicesForClient(firestoreList);
         setLocalData(LOCAL_SERVICES_KEY, sorted);
         return sorted;
-      } else {
-        const localRaw = localStorage.getItem(LOCAL_SERVICES_KEY);
-        if (localRaw !== null) {
-          const list = JSON.parse(localRaw).filter((s: Service) => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-          return sortServicesForClient(list);
-        }
-        return [];
       }
     } catch (e) {
       console.warn('Firestore getServices fallback:', e);
-      const cached = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []).filter(s => !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-      return sortServicesForClient(cached);
     }
+    return [];
   },
 
   async addService(service: Partial<Service>): Promise<Service> {
@@ -398,10 +423,9 @@ export const api = {
       callback(current.filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id)));
     }
 
-    // 2. Connect Firestore real-time snapshot for multi-device & cloud synchronization
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      unsubscribeFirestore = onSnapshot(collection(db, 'services'), (snap) => {
+    // 2. Shared Firestore real-time snapshot
+    const releaseListener = retainSharedListener('services', () => {
+      return onSnapshot(collection(db, 'services'), (snap) => {
         const deletedSet = getDeletedIds(LOCAL_DELETED_SRV_KEY);
         if (!snap.empty) {
           const firestoreList = snap.docs
@@ -409,30 +433,25 @@ export const api = {
             .filter(s => !deletedSet.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
 
           setLocalData(LOCAL_SERVICES_KEY, firestoreList);
-          callback(firestoreList);
-        } else {
-          const localRaw = localStorage.getItem(LOCAL_SERVICES_KEY);
-          if (localRaw !== null) {
-            callback(JSON.parse(localRaw).filter((s: Service) => !deletedSet.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id)));
-          }
+          notifyLocalSubscribers('services', firestoreList);
         }
       }, (err) => console.warn('subscribeToServices error:', err));
-    } catch (e) {
-      console.warn('subscribeToServices setup error:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(callback);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
   // --- Designers API ---
   async getDesigners(): Promise<Designer[]> {
+    const deleted = getDeletedIds(LOCAL_DELETED_DES_KEY);
+    const cached = getLocalData<Designer[]>(LOCAL_DESIGNERS_KEY, []).filter(d => !deleted.has(d.id));
+    if (cached.length > 0) {
+      return cached;
+    }
     try {
-      const deleted = getDeletedIds(LOCAL_DELETED_DES_KEY);
       const snap = await getDocs(collection(db, 'designers'));
       if (!snap.empty) {
         const firestoreList = snap.docs
@@ -449,17 +468,11 @@ export const api = {
 
         setLocalData(LOCAL_DESIGNERS_KEY, firestoreList);
         return firestoreList;
-      } else {
-        const localRaw = localStorage.getItem(LOCAL_DESIGNERS_KEY);
-        if (localRaw !== null) {
-          return JSON.parse(localRaw).filter((d: Designer) => !deleted.has(d.id));
-        }
-        return [];
       }
     } catch (e) {
       console.warn('Firestore getDesigners fallback:', e);
-      return getLocalData<Designer[]>(LOCAL_DESIGNERS_KEY, []);
     }
+    return [];
   },
 
   async addDesigner(designer: Partial<Designer>): Promise<Designer> {
@@ -643,10 +656,9 @@ export const api = {
       callback(current.filter(d => !deleted.has(d.id)));
     }
 
-    // 2. Connect Firestore real-time snapshot
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      unsubscribeFirestore = onSnapshot(collection(db, 'designers'), (snap) => {
+    // 2. Connect Firestore real-time snapshot with shared singleton listener
+    const releaseListener = retainSharedListener('designers', () => {
+      return onSnapshot(collection(db, 'designers'), (snap) => {
         const deletedSet = getDeletedIds(LOCAL_DELETED_DES_KEY);
         if (!snap.empty) {
           const firestoreList = snap.docs
@@ -662,23 +674,14 @@ export const api = {
             .filter(d => !deletedSet.has(d.id));
 
           setLocalData(LOCAL_DESIGNERS_KEY, firestoreList);
-          callback(firestoreList);
-        } else {
-          const localRaw = localStorage.getItem(LOCAL_DESIGNERS_KEY);
-          if (localRaw !== null) {
-            callback(JSON.parse(localRaw).filter((d: Designer) => !deletedSet.has(d.id)));
-          }
+          notifyLocalSubscribers('designers', firestoreList);
         }
       }, (err) => console.warn('subscribeToDesigners error:', err));
-    } catch (e) {
-      console.warn('subscribeToDesigners setup error:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(callback);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
@@ -795,7 +798,7 @@ export const api = {
     }
   },
 
-  // --- Bookings API with strict query boundaries & Latest-First Sorting ---
+  // --- Bookings API with Reliable Shared Cache & Instant Local-First Hydration ---
   async getBookings(options?: {
     designerId?: string;
     date?: string;
@@ -804,167 +807,120 @@ export const api = {
     status?: string;
     limitCount?: number;
   }): Promise<Booking[]> {
-    try {
-      let q = query(collection(db, 'bookings'));
-
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    
+    // Serve from cache first if available
+    if (cached && cached.length > 0 && !options?.limitCount) {
+      let filtered = cached;
       if (options?.designerId) {
-        q = query(q, where('designerId', '==', options.designerId));
+        filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
       }
       if (options?.date) {
-        q = query(q, where('date', '==', options.date));
+        filtered = filtered.filter(b => b.date === options.date);
       }
       if (options?.startDate && options?.endDate) {
-        q = query(q, where('date', '>=', options.startDate), where('date', '<=', options.endDate));
+        filtered = filtered.filter(b => b.date >= options.startDate! && b.date <= options.endDate!);
       }
       if (options?.status) {
-        q = query(q, where('status', '==', options.status));
+        filtered = filtered.filter(b => b.status === options.status);
       }
+      return sortBookingsMostRecentFirst(filtered);
+    }
 
-      if (options?.limitCount) {
-        q = query(q, limit(options.limitCount));
-      }
-
-      const snap = await getDocs(q);
+    try {
+      const snap = await getDocs(collection(db, 'bookings'));
       if (!snap.empty) {
         const list = sortBookingsMostRecentFirst(
           snap.docs
             .map(d => ({ id: d.id, ...d.data() } as Booking))
-            .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
+            .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
         );
         setLocalData(LOCAL_BOOKINGS_KEY, list);
-        return list;
+        let filtered = list;
+        if (options?.designerId) {
+          filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+        }
+        if (options?.date) {
+          filtered = filtered.filter(b => b.date === options.date);
+        }
+        if (options?.startDate && options?.endDate) {
+          filtered = filtered.filter(b => b.date >= options.startDate! && b.date <= options.endDate!);
+        }
+        if (options?.status) {
+          filtered = filtered.filter(b => b.status === options.status);
+        }
+        if (options?.limitCount) {
+          filtered = filtered.slice(0, options.limitCount);
+        }
+        return sortBookingsMostRecentFirst(filtered);
       }
     } catch (e) {
       console.warn('Firestore getBookings fallback:', e);
-      try {
-        const fallbackSnap = await getDocs(collection(db, 'bookings'));
-        if (!fallbackSnap.empty) {
-          const list = sortBookingsMostRecentFirst(
-            fallbackSnap.docs
-              .map(d => ({ id: d.id, ...d.data() } as Booking))
-              .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
-          );
-          setLocalData(LOCAL_BOOKINGS_KEY, list);
-          return list;
-        }
-      } catch {}
     }
-    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     return sortBookingsMostRecentFirst(cached);
   },
 
   /**
-   * Real-time listener for all bookings (latest dates first)
+   * Real-time listener for bookings with Singleton Shared Listener.
+   * Emits local cache immediately at 0ms, then keeps local cache perfectly in sync with Firestore.
    */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
-    let initialLoad = true;
-
     // 1. Register in-memory & cross-tab sync listener
     const syncSet = getSyncListeners('bookings');
     syncSet.add(onUpdate);
 
-    // Initial emit of cached bookings
+    // Initial immediate emit of cached bookings (0ms Frame-0 render)
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     if (cached && cached.length > 0) {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // Proactive direct fetch on subscription to guarantee immediate rendering
-    this.getBookings().then((list) => {
-      if (list && list.length > 0) {
-        onUpdate(list);
-      }
-    }).catch(() => {});
-
-    // 2. Connect Firestore real-time snapshot
-    let unsubscribeFirestore: () => void = () => {};
-    try {
+    // 2. Attach or share the single active Firestore onSnapshot listener
+    const releaseListener = retainSharedListener('bookings', () => {
       const q = collection(db, 'bookings');
-      unsubscribeFirestore = onSnapshot(
+      return onSnapshot(
         q,
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
               .map(d => ({ id: d.id, ...d.data() } as Booking))
-              .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
+              .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
           );
 
           setLocalData(LOCAL_BOOKINGS_KEY, list);
-          onUpdate(list);
-          initialLoad = false;
+          notifyLocalSubscribers('bookings', list);
         },
         (error) => {
           console.warn('subscribeToBookings snapshot warning:', error);
         }
       );
-    } catch (e) {
-      console.warn('subscribeToBookings setup warning:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(onUpdate);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
   /**
-   * Real-time listener for barber's active queue strictly bounded (max 150 limit)
+   * Real-time listener for barber's active queue.
+   * Leverages the unified in-memory bookings cache and filters strictly in memory (0 extra Firestore reads).
    */
   subscribeToBarberBookings(designerId: string, onUpdate: (bookings: Booking[]) => void): () => void {
-    const syncSet = getSyncListeners('bookings');
-    const filteredUpdate = (list: Booking[]) => {
-      onUpdate(list.filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId));
+    const handleUpdate = (list: Booking[]) => {
+      const filtered = list.filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId);
+      onUpdate(filtered);
     };
-    syncSet.add(filteredUpdate);
 
     // Initial emit of cached
-    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId);
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(
+      b => b.designerId === designerId || (b as any).walkinBarberId === designerId
+    );
     if (cached.length > 0) {
       onUpdate(sortBookingsMostRecentFirst(cached));
     }
 
-    // Direct fetch
-    this.getBookings({ designerId }).then((list) => {
-      if (list && list.length > 0) {
-        onUpdate(list);
-      }
-    }).catch(() => {});
-
-    let unsubscribeFirestore: () => void = () => {};
-    if (designerId) {
-      try {
-        const q = query(
-          collection(db, 'bookings'),
-          where('designerId', '==', designerId)
-        );
-        unsubscribeFirestore = onSnapshot(
-          q,
-          (snap) => {
-            const list = sortBookingsMostRecentFirst(
-              snap.docs
-                .map(d => ({ id: d.id, ...d.data() } as Booking))
-                .filter(b => b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now()))
-            );
-
-            onUpdate(list);
-          },
-          (error) => {
-            console.warn('subscribeToBarberBookings error:', error);
-          }
-        );
-      } catch (e) {
-        console.warn('subscribeToBarberBookings setup error:', e);
-      }
-    }
-
-    return () => {
-      syncSet.delete(filteredUpdate);
-      try {
-        unsubscribeFirestore();
-      } catch {}
-    };
+    return this.subscribeToBookings(handleUpdate);
   },
 
   // --- Synchronous Instant-Cache Accessors (Eliminates Initial 0-Flash on App Launch) ---
@@ -987,6 +943,23 @@ export const api = {
 
   getCachedClients(): UserProfile[] {
     return getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
+  },
+
+  getCachedNotifications(role: UserRole | 'all' = 'all'): NotificationItem[] {
+    const list = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
+    list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    if (role === 'all') return list;
+    if (role === 'superadmin') return [];
+    if (role === 'admin') {
+      return list.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
+    }
+    if (role === 'barber') {
+      return list.filter(n => isNotificationForBarber(n));
+    }
+    if (role === 'user') {
+      return list.filter(n => isNotificationForClient(n));
+    }
+    return list;
   },
 
   getCachedStats(): AppStats | null {
@@ -1786,6 +1759,11 @@ export const api = {
       ],
     };
 
+    const localCached = getLocalData<PaymentSettings | null>(LOCAL_SETTINGS_KEY, null);
+    if (localCached && localCached.shopName) {
+      return localCached;
+    }
+
     try {
       let snap = await getDoc(doc(db, 'settings', 'general'));
       if (!snap.exists() || !snap.data()?.shopName) {
@@ -1853,12 +1831,14 @@ export const api = {
     const syncSet = getSyncListeners('settings');
     syncSet.add(callback);
 
-    // Initial emit
-    this.getSettings().then((s) => callback(s)).catch(() => {});
+    // Initial instant emit
+    const cached = getLocalData<PaymentSettings | null>(LOCAL_SETTINGS_KEY, null);
+    if (cached) {
+      callback(cached);
+    }
 
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      unsubscribeFirestore = onSnapshot(doc(db, 'settings', 'general'), (snap) => {
+    const releaseListener = retainSharedListener('settings', () => {
+      return onSnapshot(doc(db, 'settings', 'general'), (snap) => {
         if (snap.exists()) {
           const data = snap.data() as PaymentSettings;
           if (data.logoUrl) {
@@ -1870,24 +1850,24 @@ export const api = {
             } catch {}
           }
           setLocalData(LOCAL_SETTINGS_KEY, data);
-          callback(data);
+          notifyLocalSubscribers('settings', data);
         }
       }, (err) => console.warn('subscribeToSettings error:', err));
-    } catch (e) {
-      console.warn('subscribeToSettings setup error:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(callback);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
   // --- Clients & Member Levels API ---
   async getClients(): Promise<UserProfile[]> {
     const deletedIds = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
+    const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []).filter(c => !deletedIds.has(c.id));
+    if (local.length > 0) {
+      return local;
+    }
     try {
       const snap = await getDocs(collection(db, 'clients'));
       if (!snap.empty) {
@@ -1900,8 +1880,7 @@ export const api = {
     } catch (e) {
       console.warn('Firestore getClients fallback:', e);
     }
-    const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
-    return local.filter(c => !deletedIds.has(c.id));
+    return [];
   },
 
   async purgeOldClientsAndNotifications(): Promise<{ success: boolean; message: string }> {
@@ -2173,10 +2152,10 @@ export const api = {
       onUpdate(cached.filter(c => !deletedIds.has(c.id)));
     }
 
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      const q = query(collection(db, 'clients'), limit(50));
-      unsubscribeFirestore = onSnapshot(
+    // 2. Shared Firestore listener
+    const releaseListener = retainSharedListener('clients', () => {
+      const q = query(collection(db, 'clients'), limit(150));
+      return onSnapshot(
         q,
         (snap) => {
           const currentDeleted = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
@@ -2184,21 +2163,17 @@ export const api = {
             .map(d => ({ id: d.id, ...d.data() } as UserProfile))
             .filter(c => !currentDeleted.has(c.id));
           setLocalData(LOCAL_CLIENTS_KEY, list);
-          onUpdate(list);
+          notifyLocalSubscribers('clients', list);
         },
         (error) => {
           console.warn('subscribeToClients snapshot error:', error);
         }
       );
-    } catch (e) {
-      console.warn('subscribeToClients setup error:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(onUpdate);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
@@ -2419,6 +2394,10 @@ export const api = {
 
   // --- Promos API ---
   async getPromos(): Promise<PromoCode[]> {
+    const cached = getLocalData<PromoCode[]>(LOCAL_PROMOS_KEY, []);
+    if (cached && cached.length > 0) {
+      return cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'promos'));
       if (!snap.empty) {
@@ -2525,24 +2504,19 @@ export const api = {
       callback(cached);
     }
 
-    let unsubscribeFirestore: () => void = () => {};
-    try {
-      unsubscribeFirestore = onSnapshot(collection(db, 'promos'), (snap) => {
+    const releaseListener = retainSharedListener('promos', () => {
+      return onSnapshot(collection(db, 'promos'), (snap) => {
         if (!snap.empty) {
           const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PromoCode));
           setLocalData(LOCAL_PROMOS_KEY, list);
-          callback(list);
+          notifyLocalSubscribers('promos', list);
         }
       }, (err) => console.warn('subscribeToPromos error:', err));
-    } catch (e) {
-      console.warn('subscribeToPromos setup error:', e);
-    }
+    });
 
     return () => {
       syncSet.delete(callback);
-      try {
-        unsubscribeFirestore();
-      } catch {}
+      releaseListener();
     };
   },
 
@@ -2684,6 +2658,11 @@ export const api = {
 
   // --- Audit Logs API ---
   async getAuditLogs(): Promise<AuditLog[]> {
+    const cached = getLocalData<AuditLog[] | null>(LOCAL_LOGS_KEY, null);
+    if (cached && cached.length > 0) {
+      return [...cached].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    }
+
     const seedLogs: AuditLog[] = [
       {
         id: 'log-seed-1',
@@ -2813,6 +2792,12 @@ export const api = {
       return items;
     };
 
+    const localList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
+    if (localList && localList.length > 0) {
+      localList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      return filterByRole(localList);
+    }
+
     try {
       const q = query(collection(db, 'notifications'), orderBy('timestamp', 'desc'), limit(50));
       const snap = await getDocs(q);
@@ -2827,7 +2812,6 @@ export const api = {
     } catch (e) {
       console.warn('Firestore getNotifications fallback:', e);
     }
-    const localList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     localList.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     const filtered = filterByRole(localList);
     return filtered;
@@ -3113,6 +3097,10 @@ export const api = {
 
   // --- App Stats API ---
   async getStats(): Promise<AppStats> {
+    const cachedStats = this.getCachedStats();
+    if (cachedStats) {
+      return cachedStats;
+    }
     const bookings = await this.getBookings();
     const services = await this.getServices();
     const designers = await this.getDesigners();
@@ -3378,6 +3366,10 @@ export const api = {
   // SHOP EXPENSES & MASTER PRESETS API
   // =========================================================================
   async getExpenses(filterDate?: string): Promise<ShopExpense[]> {
+    const cached = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
+    if (cached && cached.length > 0) {
+      return filterDate ? cached.filter(e => e.date === filterDate) : cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'shop_expenses'));
       if (!snap.empty) {
@@ -3386,15 +3378,10 @@ export const api = {
         if (filterDate) return list.filter(e => e.date === filterDate);
         return list;
       }
-      const local = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
-      if (filterDate) return local.filter(e => e.date === filterDate);
-      return local;
     } catch (err) {
       console.warn('getExpenses fallback:', err);
-      const local = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
-      if (filterDate) return local.filter(e => e.date === filterDate);
-      return local;
     }
+    return [];
   },
 
   subscribeToExpenses(callback: (expenses: ShopExpense[]) => void, filterDate?: string): () => void {
@@ -3408,25 +3395,24 @@ export const api = {
     };
     syncSet.add(wrappedCb);
 
-    // Initial cache emit
+    // Initial instant cache emit
     const current = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
     wrappedCb(current);
 
-    // Firestore listener with strict query limit
-    const q = filterDate
-      ? query(collection(db, 'shop_expenses'), where('date', '==', filterDate), limit(50))
-      : query(collection(db, 'shop_expenses'), limit(50));
-    const unsub = onSnapshot(q, (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
-        setLocalData(LOCAL_EXPENSES_KEY, list);
-        wrappedCb(list);
-      }
-    }, (err) => console.warn('subscribeToExpenses error:', err));
+    const releaseListener = retainSharedListener('expenses', () => {
+      const q = query(collection(db, 'shop_expenses'), limit(150));
+      return onSnapshot(q, (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
+          setLocalData(LOCAL_EXPENSES_KEY, list);
+          notifyLocalSubscribers('expenses', list);
+        }
+      }, (err) => console.warn('subscribeToExpenses error:', err));
+    });
 
     return () => {
       syncSet.delete(wrappedCb);
-      unsub();
+      releaseListener();
     };
   },
 
@@ -3492,6 +3478,10 @@ export const api = {
   },
 
   async getExpensePresets(): Promise<ExpensePreset[]> {
+    const cached = getLocalData<ExpensePreset[]>(LOCAL_EXPENSE_PRESETS_KEY, []);
+    if (cached && cached.length > 0) {
+      return cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'expense_presets'));
       if (!snap.empty) {
@@ -3499,11 +3489,10 @@ export const api = {
         setLocalData(LOCAL_EXPENSE_PRESETS_KEY, list);
         return list;
       }
-      return getLocalData<ExpensePreset[]>(LOCAL_EXPENSE_PRESETS_KEY, []);
     } catch (err) {
       console.warn('getExpensePresets fallback:', err);
-      return getLocalData<ExpensePreset[]>(LOCAL_EXPENSE_PRESETS_KEY, []);
     }
+    return [];
   },
 
   subscribeToExpensePresets(callback: (presets: ExpensePreset[]) => void): () => void {
@@ -3511,17 +3500,19 @@ export const api = {
     syncSet.add(callback);
     callback(getLocalData<ExpensePreset[]>(LOCAL_EXPENSE_PRESETS_KEY, []));
 
-    const unsub = onSnapshot(collection(db, 'expense_presets'), (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ExpensePreset));
-        setLocalData(LOCAL_EXPENSE_PRESETS_KEY, list);
-        callback(list);
-      }
-    }, (err) => console.warn('subscribeToExpensePresets error:', err));
+    const releaseListener = retainSharedListener('expense_presets', () => {
+      return onSnapshot(collection(db, 'expense_presets'), (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ExpensePreset));
+          setLocalData(LOCAL_EXPENSE_PRESETS_KEY, list);
+          notifyLocalSubscribers('expense_presets', list);
+        }
+      }, (err) => console.warn('subscribeToExpensePresets error:', err));
+    });
 
     return () => {
       syncSet.delete(callback);
-      unsub();
+      releaseListener();
     };
   },
 
@@ -3567,6 +3558,10 @@ export const api = {
   // RETAIL PRODUCTS & PRODUCT SALES API
   // =========================================================================
   async getRetailProducts(): Promise<RetailProduct[]> {
+    const cached = getLocalData<RetailProduct[]>(LOCAL_PRODUCTS_KEY, []);
+    if (cached && cached.length > 0) {
+      return cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'retail_products'));
       if (!snap.empty) {
@@ -3574,11 +3569,10 @@ export const api = {
         setLocalData(LOCAL_PRODUCTS_KEY, list);
         return list;
       }
-      return getLocalData<RetailProduct[]>(LOCAL_PRODUCTS_KEY, []);
     } catch (err) {
       console.warn('getRetailProducts fallback:', err);
-      return getLocalData<RetailProduct[]>(LOCAL_PRODUCTS_KEY, []);
     }
+    return [];
   },
 
   subscribeToRetailProducts(callback: (products: RetailProduct[]) => void): () => void {
@@ -3586,17 +3580,19 @@ export const api = {
     syncSet.add(callback);
     callback(getLocalData<RetailProduct[]>(LOCAL_PRODUCTS_KEY, []));
 
-    const unsub = onSnapshot(collection(db, 'retail_products'), (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailProduct));
-        setLocalData(LOCAL_PRODUCTS_KEY, list);
-        callback(list);
-      }
-    }, (err) => console.warn('subscribeToRetailProducts error:', err));
+    const releaseListener = retainSharedListener('retail_products', () => {
+      return onSnapshot(collection(db, 'retail_products'), (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailProduct));
+          setLocalData(LOCAL_PRODUCTS_KEY, list);
+          notifyLocalSubscribers('products', list);
+        }
+      }, (err) => console.warn('subscribeToRetailProducts error:', err));
+    });
 
     return () => {
       syncSet.delete(callback);
-      unsub();
+      releaseListener();
     };
   },
 
@@ -3638,6 +3634,10 @@ export const api = {
   },
 
   async getRetailSales(filterDate?: string): Promise<RetailSale[]> {
+    const cached = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
+    if (cached && cached.length > 0) {
+      return filterDate ? cached.filter(s => s.date === filterDate) : cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'retail_sales'));
       if (!snap.empty) {
@@ -3646,15 +3646,10 @@ export const api = {
         if (filterDate) return list.filter(s => s.date === filterDate);
         return list;
       }
-      const local = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
-      if (filterDate) return local.filter(s => s.date === filterDate);
-      return local;
     } catch (err) {
       console.warn('getRetailSales fallback:', err);
-      const local = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
-      if (filterDate) return local.filter(s => s.date === filterDate);
-      return local;
     }
+    return [];
   },
 
   subscribeToRetailSales(callback: (sales: RetailSale[]) => void, filterDate?: string): () => void {
@@ -3671,20 +3666,20 @@ export const api = {
     const current = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
     wrappedCb(current);
 
-    const q = filterDate
-      ? query(collection(db, 'retail_sales'), where('date', '==', filterDate), limit(50))
-      : query(collection(db, 'retail_sales'), limit(50));
-    const unsub = onSnapshot(q, (snap) => {
-      if (!snap.empty) {
-        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
-        setLocalData(LOCAL_RETAIL_SALES_KEY, list);
-        wrappedCb(list);
-      }
-    }, (err) => console.warn('subscribeToRetailSales error:', err));
+    const releaseListener = retainSharedListener('retail_sales', () => {
+      const q = query(collection(db, 'retail_sales'), limit(150));
+      return onSnapshot(q, (snap) => {
+        if (!snap.empty) {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
+          setLocalData(LOCAL_RETAIL_SALES_KEY, list);
+          notifyLocalSubscribers('retail_sales', list);
+        }
+      }, (err) => console.warn('subscribeToRetailSales error:', err));
+    });
 
     return () => {
       syncSet.delete(wrappedCb);
-      unsub();
+      releaseListener();
     };
   },
 

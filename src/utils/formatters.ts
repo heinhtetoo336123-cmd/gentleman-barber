@@ -149,29 +149,52 @@ export function isRatingWithin12Hours(booking: {
 }
 
 /**
- * Sorts bookings with primary focus on appointment date (latest / today / future dates first):
- * 1. Appointment Date (YYYY-MM-DD) descending (Today and upcoming dates first).
- * 2. Time Slot descending (later time slots of the day first).
- * 3. Created/Updated timestamps descending.
+ * Helper to parse timeSlot string (e.g. "14:30", "02:30 PM", "9:00 AM", "09:00 - 10:00") into minutes from midnight (0 - 1439).
  */
-export function sortBookingsMostRecentFirst<T extends { createdAt?: string; updatedAt?: string; date?: string; timeSlot?: string; status?: string }>(
+export function parseTimeSlotToMinutes(slotStr: string | undefined): number {
+  if (!slotStr) return 0;
+  try {
+    const cleanSlot = slotStr.split('-')[0].trim();
+    const isPM = /pm/i.test(cleanSlot);
+    const isAM = /am/i.test(cleanSlot);
+    const digitsOnly = cleanSlot.replace(/(am|pm)/gi, '').trim();
+    const parts = digitsOnly.split(':');
+    if (parts.length >= 2) {
+      let h = parseInt(parts[0], 10) || 0;
+      const m = parseInt(parts[1], 10) || 0;
+      if (isPM && h < 12) h += 12;
+      if (isAM && h === 12) h = 0;
+      return h * 60 + m;
+    }
+  } catch {}
+  return 0;
+}
+
+/**
+ * Sorts bookings with primary focus on appointment timeline (most recent first):
+ * 1. Appointment Date (YYYY-MM-DD) descending (Today and upcoming dates first).
+ * 2. Time Slot descending (later time slots of the day first, e.g. 05:00 PM before 02:00 PM before 10:00 AM).
+ * 3. Created/Updated timestamps descending (latest registered booking first).
+ * 4. Booking Code descending as tie-breaker.
+ */
+export function sortBookingsMostRecentFirst<T extends { createdAt?: string; updatedAt?: string; date?: string; timeSlot?: string; status?: string; bookingCode?: string; id?: string }>(
   bookings: T[]
 ): T[] {
   if (!bookings || !Array.isArray(bookings)) return [];
 
   return [...bookings].sort((a, b) => {
-    // 1. Primary: Compare appointment date (YYYY-MM-DD) descending (e.g. 2026-09-25 before 2026-09-21)
-    const dateA = a.date || '';
-    const dateB = b.date || '';
+    // 1. Primary: Compare appointment date (YYYY-MM-DD) descending
+    const dateA = (a.date || '').replace(/\//g, '-').split('T')[0];
+    const dateB = (b.date || '').replace(/\//g, '-').split('T')[0];
     if (dateA !== dateB) {
       return dateB.localeCompare(dateA);
     }
 
-    // 2. Secondary: Compare appointment timeSlot descending
-    const slotA = a.timeSlot || '';
-    const slotB = b.timeSlot || '';
-    if (slotA !== slotB) {
-      return slotB.localeCompare(slotA);
+    // 2. Secondary: Compare appointment timeSlot descending (by actual 24-hour minutes)
+    const minsA = parseTimeSlotToMinutes(a.timeSlot);
+    const minsB = parseTimeSlotToMinutes(b.timeSlot);
+    if (minsA !== minsB) {
+      return minsB - minsA;
     }
 
     // 3. Tertiary: Compare createdAt / updatedAt timestamps descending
@@ -181,7 +204,10 @@ export function sortBookingsMostRecentFirst<T extends { createdAt?: string; upda
       return timeB - timeA;
     }
 
-    return 0;
+    // 4. Stable tie-breaker: bookingCode / ID descending
+    const codeA = a.bookingCode || a.id || '';
+    const codeB = b.bookingCode || b.id || '';
+    return codeB.localeCompare(codeA);
   });
 }
 
