@@ -58,6 +58,48 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
   const [dateBookings, setDateBookings] = useState<Booking[] | null>(null);
   const [loadingDate, setLoadingDate] = useState(false);
 
+  // Safe Paginated History State (limit 30 + startAfter)
+  const [paginatedBookings, setPaginatedBookings] = useState<Booking[]>([]);
+  const [lastBookingDoc, setLastBookingDoc] = useState<any>(null);
+  const [hasMoreBookings, setHasMoreBookings] = useState<boolean>(false);
+  const [loadingMoreBookings, setLoadingMoreBookings] = useState<boolean>(false);
+
+  // Initial paginated fetch for full logs when browsing all bookings
+  React.useEffect(() => {
+    if (!selectedDate) {
+      api.getPaginatedBookings({ limitCount: 30 })
+        .then((res) => {
+          setPaginatedBookings(res.bookings);
+          setLastBookingDoc(res.lastDoc);
+          setHasMoreBookings(res.hasMore);
+        })
+        .catch(() => {});
+    }
+  }, [selectedDate]);
+
+  const handleLoadMoreBookings = async () => {
+    if (loadingMoreBookings || !hasMoreBookings || !lastBookingDoc) return;
+    setLoadingMoreBookings(true);
+    try {
+      const res = await api.getPaginatedBookings({
+        lastDoc: lastBookingDoc,
+        limitCount: 30
+      });
+      setPaginatedBookings((prev) => {
+        const idMap = new Map<string, Booking>();
+        prev.forEach((b) => idMap.set(b.id, b));
+        res.bookings.forEach((b) => idMap.set(b.id, b));
+        return Array.from(idMap.values());
+      });
+      setLastBookingDoc(res.lastDoc);
+      setHasMoreBookings(res.hasMore);
+    } catch (err) {
+      console.warn('BookingManager handleLoadMoreBookings error:', err);
+    } finally {
+      setLoadingMoreBookings(false);
+    }
+  };
+
   // On-Demand Date Fetcher: Automatically loads past date records directly into state and cache
   React.useEffect(() => {
     if (selectedDate && selectedDate.trim()) {
@@ -258,9 +300,10 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
     const idMap = new Map<string, Booking>();
     (bookings || []).forEach((b) => idMap.set(b.id, b));
     (dateBookings || []).forEach((b) => idMap.set(b.id, b));
+    (paginatedBookings || []).forEach((b) => idMap.set(b.id, b));
     api.getCachedBookings().forEach((b) => idMap.set(b.id, b));
     return Array.from(idMap.values());
-  }, [bookings, dateBookings]);
+  }, [bookings, dateBookings, paginatedBookings]);
 
   const filteredBookings = React.useMemo(() => {
     const list = sourceBookings.filter((b) => {
@@ -721,6 +764,30 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Safe Paginated History Load More Button */}
+      {!selectedDate && hasMoreBookings && (
+        <div className="flex justify-center pt-3 pb-4">
+          <button
+            type="button"
+            onClick={handleLoadMoreBookings}
+            disabled={loadingMoreBookings}
+            className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-2xl bg-stone-900 hover:bg-stone-800 disabled:opacity-50 text-white font-mono font-bold text-xs shadow-md transition-all cursor-pointer"
+          >
+            {loadingMoreBookings ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
+                <span>Loading next 30 records...</span>
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-4 h-4 text-emerald-400" />
+                <span>Load Next 30 Bookings</span>
+              </>
+            )}
+          </button>
         </div>
       )}
 

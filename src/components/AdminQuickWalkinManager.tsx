@@ -22,6 +22,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Sparkles,
   ArrowRight,
   RefreshCw,
@@ -83,16 +84,26 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   const [periodBookings, setPeriodBookings] = useState<Booking[] | null>(null);
   const [loadingPeriod, setLoadingPeriod] = useState(false);
 
-  // Load all operational bookings on mount for zero-lag filtering
+  // Safe Paginated History State (limit 30 + startAfter)
+  const [paginatedRecords, setPaginatedRecords] = useState<Booking[]>([]);
+  const [historyLastDoc, setHistoryLastDoc] = useState<any>(null);
+  const [hasMoreHistory, setHasMoreHistory] = useState<boolean>(false);
+  const [loadingMoreHistory, setLoadingMoreHistory] = useState<boolean>(false);
+
+  // Safe Initial Load: Load only first 30 records on mount (prevents read spikes)
   useEffect(() => {
-    api.loadAdminBookings().then((res) => {
-      if (res && res.length > 0) {
-        setPeriodBookings(res);
-      }
-    }).catch(() => {});
+    setLoadingPeriod(true);
+    api.getPaginatedBookings({ limitCount: 30 })
+      .then((res) => {
+        setPaginatedRecords(res.bookings);
+        setHistoryLastDoc(res.lastDoc);
+        setHasMoreHistory(res.hasMore);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingPeriod(false));
   }, []);
 
-  // On-Demand Historical Walk-ins Fetcher (Cache-First)
+  // On-Demand Historical Date/Range Fetcher (Targeted single-day & cached)
   useEffect(() => {
     let startDate: string | undefined;
     let endDate: string | undefined;
@@ -118,13 +129,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
         endDate = historyCustomEndDate;
       }
     } else if (historyPeriodFilter === 'all') {
-      setLoadingPeriod(true);
-      api.loadAdminBookings()
-        .then((res) => {
-          if (res && res.length > 0) setPeriodBookings(res);
-        })
-        .catch(() => {})
-        .finally(() => setLoadingPeriod(false));
+      // Browsing all history: already handled by paginatedRecords (30 records at a time)
       return;
     }
 
@@ -149,6 +154,30 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
         .finally(() => setLoadingPeriod(false));
     }
   }, [historyPeriodFilter, historyCustomStartDate, historyCustomEndDate, todayStr]);
+
+  // Load Next 30 Records On-Demand (Paginator)
+  const handleLoadMoreHistory = async () => {
+    if (loadingMoreHistory || !hasMoreHistory || !historyLastDoc) return;
+    setLoadingMoreHistory(true);
+    try {
+      const res = await api.getPaginatedBookings({
+        lastDoc: historyLastDoc,
+        limitCount: 30
+      });
+      setPaginatedRecords((prev) => {
+        const idMap = new Map<string, Booking>();
+        prev.forEach((b) => idMap.set(b.id, b));
+        res.bookings.forEach((b) => idMap.set(b.id, b));
+        return Array.from(idMap.values());
+      });
+      setHistoryLastDoc(res.lastDoc);
+      setHasMoreHistory(res.hasMore);
+    } catch (err) {
+      console.warn('Failed to load more history:', err);
+    } finally {
+      setLoadingMoreHistory(false);
+    }
+  };
 
   // Edit Walk-in Record Modal State
   const [editingRecord, setEditingRecord] = useState<Booking | null>(null);
@@ -317,11 +346,14 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     (periodBookings || []).forEach((b) => {
       if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
     });
+    (paginatedRecords || []).forEach((b) => {
+      if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
+    });
     api.getCachedBookings().forEach((b) => {
       if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
     });
     return Array.from(idMap.values());
-  }, [bookings, periodBookings, deletedBookingIds]);
+  }, [bookings, periodBookings, paginatedRecords, deletedBookingIds]);
 
   const allWalkinBookings = useMemo(() => {
     return (sourceWalkinBookings || [])
@@ -1127,6 +1159,30 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Safe Paginated History Load More Button */}
+          {historyPeriodFilter === 'all' && hasMoreHistory && (
+            <div className="flex justify-center pt-3 pb-2">
+              <button
+                type="button"
+                onClick={handleLoadMoreHistory}
+                disabled={loadingMoreHistory}
+                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-2xl bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white font-mono font-bold text-xs shadow-md transition-all cursor-pointer"
+              >
+                {loadingMoreHistory ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-emerald-300" />
+                    <span>{lang === 'my' ? 'နောက်ထပ် ၃၀ ရယူနေသည်...' : 'Loading 30 more records...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-4 h-4 text-emerald-300" />
+                    <span>{lang === 'my' ? 'နောက်ထပ် ၃၀ ရယူမည် (Load Next 30)' : 'Load Next 30 Records'}</span>
+                  </>
+                )}
+              </button>
             </div>
           )}
         </div>

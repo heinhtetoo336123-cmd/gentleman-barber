@@ -952,9 +952,9 @@ export const api = {
   }): Promise<Booking[]> {
     // 1. SPECIFIC DATE REQUESTED (e.g. Admin selected a past date in Date Picker):
     if (options?.date) {
-      const targetDate = options.date;
+      const targetDate = options.date.split('T')[0];
 
-      // In-memory cache hit: 0 network, 0 cloud reads, instant render
+      // Step 1: In-memory cache hit (0 network, 0 cloud reads)
       if (inMemoryDateBookingsCache.has(targetDate)) {
         let list = inMemoryDateBookingsCache.get(targetDate) || [];
         if (options.designerId) {
@@ -966,53 +966,69 @@ export const api = {
         return sortBookingsMostRecentFirst(list);
       }
 
-      // Check persistent cache if already populated
-      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-      const inCacheForDate = cached.filter(b => b.date === targetDate);
-
-      // Targeted Single-Day Query: ONLY reads documents for this exact date
-      let fetchedForDate: Booking[] = [];
-
-      // Step A: Fast Server Proxy (Lightweight, strips heavy images, responds in ~30ms)
+      // Step 2: SessionStorage cache hit (0 network, 0 cloud reads, survives refreshes)
       try {
-        const resp = await fetch(`/api/firestore/bookings?date=${encodeURIComponent(targetDate)}`);
-        if (resp.ok) {
-          const data = await resp.json();
-          if (Array.isArray(data) && data.length > 0) {
-            fetchedForDate = data.map((d: any) => ({
-              ...d,
-              bookingCode: d.bookingCode || (d.id ? d.id.toUpperCase() : 'WLK-GUEST'),
-              designerAvatar: d.designerAvatar || '',
-              paymentSlipUrl: d.paymentSlipUrl || '',
-            }));
+        if (typeof sessionStorage !== 'undefined') {
+          const sessionRaw = sessionStorage.getItem(`baba_hist_date_${targetDate}`);
+          if (sessionRaw) {
+            const parsed = JSON.parse(sessionRaw);
+            if (Array.isArray(parsed) && parsed.length >= 0) {
+              inMemoryDateBookingsCache.set(targetDate, parsed);
+              let list = parsed;
+              if (options.designerId) {
+                list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+              }
+              if (options.status) {
+                list = list.filter(b => b.status === options.status);
+              }
+              return sortBookingsMostRecentFirst(list);
+            }
           }
         }
       } catch {}
 
-      // Step B: Direct Firestore Server Fetch (bypasses any stale IndexedDB offline cache!)
-      if (fetchedForDate.length === 0) {
+      // Step 3: Check persistent localStorage for target date records
+      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const inCacheForDate = cached.filter(b => (b.date || '').split('T')[0] === targetDate);
+      if (inCacheForDate.length > 0) {
+        inMemoryDateBookingsCache.set(targetDate, inCacheForDate);
         try {
-          const q = query(collection(db, 'bookings'), where('date', '==', targetDate));
-          let snap;
-          try {
-            snap = await getDocsFromServer(q);
-          } catch {
-            snap = await getDocs(q);
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(`baba_hist_date_${targetDate}`, JSON.stringify(inCacheForDate));
           }
-          fetchedForDate = snap.docs.map(parseBookingDoc);
-        } catch (err) {
-          console.warn('Direct Firestore targeted date fetch fallback:', err);
+        } catch {}
+        return sortBookingsMostRecentFirst(inCacheForDate);
+      }
+
+      // Step 4: Targeted Single-Day Query: query ONLY documents where `date == targetDate` (Never load full collection)
+      let fetchedForDate: Booking[] = [];
+
+      try {
+        const q = query(collection(db, 'bookings'), where('date', '==', targetDate));
+        let snap;
+        try {
+          snap = await getDocsFromServer(q);
+        } catch {
+          snap = await getDocs(q);
         }
+        fetchedForDate = snap.docs.map(parseBookingDoc);
+      } catch (err) {
+        console.warn('Direct Firestore targeted date fetch fallback:', err);
       }
 
       fetchedForDate = sortBookingsMostRecentFirst(
         fetchedForDate.filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
       );
 
-      const resolvedList = fetchedForDate.length > 0 ? fetchedForDate : inCacheForDate;
+      const resolvedList = fetchedForDate;
 
-      // Cache in memory for 0-read reuse throughout this session
+      // Cache in memory AND in sessionStorage for 0-read reuse throughout this session
       inMemoryDateBookingsCache.set(targetDate, resolvedList);
+      try {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.setItem(`baba_hist_date_${targetDate}`, JSON.stringify(resolvedList));
+        }
+      } catch {}
 
       // Store into persistent local cache
       const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
@@ -1190,8 +1206,7 @@ export const api = {
 
   /**
    * Dedicated Admin Dataset Loader:
-   * When authenticated as Admin / SuperAdmin, loads the full operational bookings
-   * so all historical dates (from 17th to 29th) are immediately visible without missing records.
+   * Safely loads the initial operational bookings with limit(30) to prevent collection read spikes.
    * Caches locally so subsequent views are 0 cloud reads.
    */
   async loadAdminBookings(): Promise<Booking[]> {
@@ -1200,8 +1215,14 @@ export const api = {
       return cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'bookings'));
-      const list = sortBookingsMostRecentFirst(
+      const q = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'), limit(30));
+      let snap;
+      try {
+        snap = await getDocs(q);
+      } catch {
+        snap = await getDocs(query(collection(db, 'bookings'), limit(30)));
+      }
+      const list: Booking[] = sortBookingsMostRecentFirst<Booking>(
         snap.docs
           .map(parseBookingDoc)
           .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
@@ -1214,6 +1235,77 @@ export const api = {
     } catch (e) {
       console.warn('loadAdminBookings fallback:', e);
       return cached;
+    }
+  },
+
+  /**
+   * Safe Paginated History Query:
+   * Fetches only 30 records at a time using Firestore limit(30) and startAfter() cursor.
+   * Prevents full-collection read spikes when browsing all history.
+   */
+  async getPaginatedBookings(options?: {
+    lastDoc?: any;
+    limitCount?: number;
+    date?: string;
+  }): Promise<{ bookings: Booking[]; lastDoc: any; hasMore: boolean }> {
+    const pageSize = options?.limitCount || 30;
+    try {
+      let constraints: any[] = [];
+      if (options?.date) {
+        constraints.push(where('date', '==', options.date.split('T')[0]));
+      }
+      constraints.push(orderBy('createdAt', 'desc'));
+      constraints.push(limit(pageSize));
+
+      if (options?.lastDoc) {
+        constraints.push(startAfter(options.lastDoc));
+      }
+
+      const q = query(collection(db, 'bookings'), ...constraints);
+      let snap;
+      try {
+        snap = await getDocs(q);
+      } catch (compoundErr) {
+        console.warn('getPaginatedBookings compound index fallback:', compoundErr);
+        let fallbackConstraints: any[] = [];
+        if (options?.date) {
+          fallbackConstraints.push(where('date', '==', options.date.split('T')[0]));
+        }
+        fallbackConstraints.push(limit(pageSize));
+        if (options?.lastDoc) {
+          fallbackConstraints.push(startAfter(options.lastDoc));
+        }
+        const fallbackQ = query(collection(db, 'bookings'), ...fallbackConstraints);
+        snap = await getDocs(fallbackQ);
+      }
+
+      const docs = snap.docs;
+      const bookings = docs.map(parseBookingDoc).filter(b => !(b as any).isDeleted);
+      const lastVisible = docs.length > 0 ? docs[docs.length - 1] : null;
+      const hasMore = docs.length === pageSize;
+
+      // Merge into local cache
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      bookings.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+      notifyLocalSubscribers('bookings', merged);
+
+      return {
+        bookings,
+        lastDoc: lastVisible,
+        hasMore
+      };
+    } catch (err: any) {
+      console.warn('getPaginatedBookings failed:', err);
+      const local = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      return {
+        bookings: local.slice(0, pageSize),
+        lastDoc: null,
+        hasMore: false
+      };
     }
   },
 
