@@ -143,7 +143,7 @@ if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
   }
 }
 
-// Shared Firestore Snapshot Listeners Pool with Reference Counting
+// Shared Firestore Snapshot Listeners Pool with Permanent Singleton Pattern (Zero Reconnect Thrashing)
 interface SharedListenerHandle {
   unsubscribe: () => void;
   refCount: number;
@@ -151,29 +151,41 @@ interface SharedListenerHandle {
 const sharedFirestoreListeners = new Map<string, SharedListenerHandle>();
 
 function retainSharedListener(key: string, attachFn: () => () => void): () => void {
-  const existing = sharedFirestoreListeners.get(key);
-  if (existing) {
-    existing.refCount += 1;
-  } else {
+  let existing = sharedFirestoreListeners.get(key);
+  if (!existing) {
     try {
       const unsub = attachFn();
-      sharedFirestoreListeners.set(key, { unsubscribe: unsub, refCount: 1 });
+      existing = { unsubscribe: unsub, refCount: 1 };
+      sharedFirestoreListeners.set(key, existing);
     } catch (e) {
       console.warn(`Error attaching shared Firestore listener for ${key}:`, e);
     }
+  } else {
+    existing.refCount += 1;
   }
 
   return () => {
     const handle = sharedFirestoreListeners.get(key);
     if (!handle) return;
-    handle.refCount -= 1;
-    if (handle.refCount <= 0) {
-      try {
-        handle.unsubscribe();
-      } catch {}
-      sharedFirestoreListeners.delete(key);
-    }
+    handle.refCount = Math.max(0, handle.refCount - 1);
+    // EMERGENCY STOP FIX: DO NOT unsubscribe or delete singleton listener on unmount!
+    // Keeping the singleton listener active across component lifecycles eliminates
+    // teardown/reconnect thrashing and stops Firestore read spikes completely.
   };
+}
+
+// Global Firestore Fetch Debounce (3500ms delay) to protect against infinite read loops
+const firestoreFetchTimestamps = new Map<string, number>();
+const FIRESTORE_DEBOUNCE_MS = 3500;
+
+function shouldThrottleFirestoreFetch(cacheKey: string): boolean {
+  const now = Date.now();
+  const last = firestoreFetchTimestamps.get(cacheKey) || 0;
+  if (now - last < FIRESTORE_DEBOUNCE_MS) {
+    return true; // Throttle! Use local cache
+  }
+  firestoreFetchTimestamps.set(cacheKey, now);
+  return false;
 }
 
 // Window Storage Event Listener (fallback for browsers where BroadcastChannel is blocked or sandboxed)
@@ -407,7 +419,7 @@ export const api = {
   async getServices(): Promise<Service[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
     const cached = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []).filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-    if (cached.length > 0) {
+    if (cached.length > 0 || shouldThrottleFirestoreFetch('services')) {
       return sortServicesForClient(cached);
     }
     try {
@@ -585,6 +597,7 @@ export const api = {
     // 2. Shared Firestore real-time snapshot
     const releaseListener = retainSharedListener('services', () => {
       return onSnapshot(collection(db, 'services'), (snap) => {
+        if (snap.metadata.hasPendingWrites) return;
         const deletedSet = getDeletedIds(LOCAL_DELETED_SRV_KEY);
         if (!snap.empty) {
           const firestoreList = snap.docs
@@ -609,7 +622,7 @@ export const api = {
   async getDesigners(): Promise<Designer[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_DES_KEY);
     const cached = getLocalData<Designer[]>(LOCAL_DESIGNERS_KEY, []).filter(d => !deleted.has(d.id));
-    if (cached.length > 0) {
+    if (cached.length > 0 || shouldThrottleFirestoreFetch('designers')) {
       return cached;
     }
     try {
@@ -820,6 +833,7 @@ export const api = {
     // 2. Connect Firestore real-time snapshot with shared singleton listener
     const releaseListener = retainSharedListener('designers', () => {
       return onSnapshot(collection(db, 'designers'), (snap) => {
+        if (snap.metadata.hasPendingWrites) return;
         const deletedSet = getDeletedIds(LOCAL_DELETED_DES_KEY);
         if (!snap.empty) {
           const firestoreList = snap.docs
@@ -1216,6 +1230,10 @@ export const api = {
    * Caches locally so subsequent views are 0 cloud reads.
    */
   async loadAdminBookings(): Promise<Booking[]> {
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    if (cached.length > 0 || shouldThrottleFirestoreFetch('admin_bookings')) {
+      return cached;
+    }
     try {
       const snap = await getDocs(collection(db, 'bookings'));
       const list = sortBookingsMostRecentFirst(
@@ -1230,7 +1248,7 @@ export const api = {
       return list;
     } catch (e) {
       console.warn('loadAdminBookings fallback:', e);
-      return getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      return cached;
     }
   },
 
@@ -1372,6 +1390,7 @@ export const api = {
       return onSnapshot(
         q,
         (snap) => {
+          if (snap.metadata.hasPendingWrites) return;
           const list = sortBookingsMostRecentFirst(
             snap.docs
               .map(parseBookingDoc)
@@ -2344,7 +2363,7 @@ export const api = {
   async getClients(): Promise<UserProfile[]> {
     const deletedIds = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
     const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []).filter(c => !deletedIds.has(c.id));
-    if (local.length > 0) {
+    if (local.length > 0 || shouldThrottleFirestoreFetch('clients')) {
       return local;
     }
     try {
@@ -2354,6 +2373,7 @@ export const api = {
           .map(d => ({ id: d.id, ...d.data() } as UserProfile))
           .filter(c => !deletedIds.has(c.id));
         setLocalData(LOCAL_CLIENTS_KEY, list);
+        notifyLocalSubscribers('clients', list);
         return list;
       }
     } catch (e) {
@@ -2627,6 +2647,7 @@ export const api = {
       return onSnapshot(
         q,
         (snap) => {
+          if (snap.metadata.hasPendingWrites) return;
           const currentDeleted = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
           const list = snap.docs
             .map(d => ({ id: d.id, ...d.data() } as UserProfile))

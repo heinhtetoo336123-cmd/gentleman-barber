@@ -16,20 +16,25 @@ try {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
+const targetDbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
+
 export const db = (() => {
   try {
-    return initializeFirestore(
-      app,
-      {
-        localCache: persistentLocalCache({
-          tabManager: persistentMultipleTabManager()
-        }),
-        experimentalForceLongPolling: true,
-      },
-      (firebaseConfig as any).firestoreDatabaseId
-    );
-  } catch {
-    return getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
+    const firestoreSettings = {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+      }),
+      experimentalForceLongPolling: false
+    };
+
+    return targetDbId && targetDbId !== '(default)'
+      ? initializeFirestore(app, firestoreSettings, targetDbId)
+      : initializeFirestore(app, firestoreSettings);
+  } catch (err) {
+    console.warn('initializeFirestore fallback to getFirestore:', err);
+    return targetDbId && targetDbId !== '(default)'
+      ? getFirestore(app, targetDbId)
+      : getFirestore(app);
   }
 })();
 

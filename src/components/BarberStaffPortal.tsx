@@ -216,11 +216,41 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
   // Commission Rate
   const commissionRate = activeDesigner?.commissionPercent ?? 50;
 
-  // Filter all bookings strictly to this barber
+  // Real-time reactive bookings synced from Props and live Firestore Watch stream
+  const [liveBookings, setLiveBookings] = useState<Booking[]>(() => {
+    return (bookings && bookings.length > 0) ? bookings : api.getCachedBookings();
+  });
+
+  useEffect(() => {
+    if (bookings && bookings.length > 0) {
+      setLiveBookings(bookings);
+    }
+  }, [bookings]);
+
+  useEffect(() => {
+    const unsub = api.subscribeToBookings((updated) => {
+      if (updated && Array.isArray(updated)) {
+        setLiveBookings(updated);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Filter all bookings strictly to this barber (by ID, Walk-in ID, name, or phone)
   const barberBookings = useMemo(() => {
     if (!activeDesigner) return [];
-    return bookings.filter((b) => b.designerId === activeDesigner.id);
-  }, [bookings, activeDesigner]);
+    const dId = activeDesigner.id;
+    const dName = (activeDesigner.name || '').trim().toLowerCase();
+    const dPhone = (activeDesigner.phone || '').replace(/[^0-9]/g, '');
+
+    return liveBookings.filter((b) => {
+      if (b.designerId === dId) return true;
+      if ((b as any).walkinBarberId === dId) return true;
+      if (dName && b.designerName && b.designerName.trim().toLowerCase() === dName) return true;
+      if (dPhone && (b as any).barberPhone && (b as any).barberPhone.replace(/[^0-9]/g, '') === dPhone) return true;
+      return false;
+    });
+  }, [liveBookings, activeDesigner]);
 
   // Timeline Bookings for Selected Date or Date Range with Channel Filter
   const timelineFilteredBookings = useMemo(() => {
@@ -396,6 +426,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
   // Accept / Confirm Booking
   const handleConfirmBooking = async (b: Booking) => {
     setActionLoadingId(b.id);
+    setLiveBookings((prev) => prev.map((item) => (item.id === b.id ? { ...item, status: 'confirmed' } : item)));
     try {
       await api.updateBookingStatus(b.id, 'confirmed', `Barber ${activeDesigner?.name || ''} မှ ဘိုကင် အတည်ပြု လက်ခံလိုက်ပါပြီ`);
       playSuccessChime();
@@ -410,6 +441,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
   // Start In-Chair Service
   const handleStartService = async (b: Booking) => {
     setActionLoadingId(b.id);
+    setLiveBookings((prev) => prev.map((item) => (item.id === b.id ? { ...item, status: 'in-progress' } : item)));
     try {
       await api.updateBookingStatus(b.id, 'in-progress', `ဧည့်သည်တော် ခုံပေါ်ရောက်ရှိပြီး ဝန်ဆောင်မှု စတင်နေပါသည်`);
       playNotificationChime();
@@ -430,9 +462,11 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
   // Submit Complete with Note
   const handleSubmitComplete = async () => {
     if (!completingBooking) return;
+    const targetId = completingBooking.id;
     setSavingNote(true);
+    setLiveBookings((prev) => prev.map((item) => (item.id === targetId ? { ...item, status: 'completed' } : item)));
     try {
-      await api.completeBookingWithNote(completingBooking.id, completionNote);
+      await api.completeBookingWithNote(targetId, completionNote);
       playSuccessChime();
       setCompletingBooking(null);
       onRefresh();

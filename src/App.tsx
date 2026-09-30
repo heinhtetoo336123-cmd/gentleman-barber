@@ -122,13 +122,6 @@ export default function App() {
         setRole(decrypted.role as UserRole);
         setHasSelectedPortal(true);
         setActiveTab('admin-dashboard');
-        const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
-        fetchToday.then((bList) => {
-          if (bList && bList.length > 0) {
-            setBookings(bList);
-            setStats(api.getCachedStats());
-          }
-        }).catch(() => {});
       }
     } else {
       const savedBarberSession = localStorage.getItem('baba_barber_session');
@@ -207,14 +200,10 @@ export default function App() {
     });
 
     const unsubBookings = api.subscribeToBookings((updatedBookings) => {
-      setBookings((prev) => {
-        const idMap = new Map<string, Booking>();
-        (prev || []).forEach(b => idMap.set(b.id, b));
-        (updatedBookings || []).forEach(b => idMap.set(b.id, b));
-        api.getCachedBookings().forEach(b => idMap.set(b.id, b));
-        return Array.from(idMap.values());
-      });
-      setStats(api.getCachedStats());
+      if (Array.isArray(updatedBookings)) {
+        setBookings(updatedBookings);
+        setStats(api.getCachedStats());
+      }
     });
 
     return () => {
@@ -234,14 +223,6 @@ export default function App() {
       const unsubClients = api.subscribeToClients((updatedClients) => {
         setClients(updatedClients);
       });
-      // Sync today's operational queue for Admin Dashboard
-      const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
-      fetchToday.then((bList) => {
-        if (bList && bList.length > 0) {
-          setBookings(bList);
-          setStats(api.getCachedStats());
-        }
-      }).catch(() => {});
 
       return () => {
         unsubClients();
@@ -300,8 +281,8 @@ export default function App() {
     }
   }, [role, designers]);
 
-  const loadAllData = async () => {
-    // 1. Immediately hydrate from cache (0ms instant display, zero loading delay)
+  const loadAllData = () => {
+    // 1. Immediately hydrate from in-memory / local storage cache (0 Firestore Cloud Reads)
     const cServices = api.getCachedServices();
     const cDesigners = api.getCachedDesigners();
     const cBookings = api.getCachedBookings();
@@ -316,32 +297,7 @@ export default function App() {
     setStats(api.getCachedStats());
     if (cSettings) setShopSettings(cSettings);
     if (cNotifs && cNotifs.length > 0) setNotifications(cNotifs);
-
-    // 2. Fetch today's operational bookings for live real-time schedule (Quota-efficient: only today's records)
-    try {
-      const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
-      fetchToday.then((bList) => {
-        if (bList && bList.length > 0) {
-          setBookings(bList);
-          setStats(api.getCachedStats());
-        }
-      }).catch(() => {});
-
-      if (!cServices || cServices.length === 0) {
-        api.getServices().then(sList => { if (sList && sList.length > 0) setServices(sList); }).catch(() => {});
-      }
-      if (!cDesigners || cDesigners.length === 0) {
-        api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
-      }
-      if (!cSettings) {
-        api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
-      }
-      if (role === 'admin' || role === 'superadmin') {
-        api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
-      }
-    } catch (err) {
-      console.warn('loadAllData background fetch warning:', err);
-    }
+    // Real-time singleton listeners already maintain live sync with 0 read spikes.
   };
 
   const handleSelectLang = (newLang: Language) => {
@@ -362,13 +318,6 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
-    const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
-    fetchToday.then((bList) => {
-      if (bList && bList.length > 0) {
-        setBookings(bList);
-        setStats(api.getCachedStats());
-      }
-    }).catch(() => {});
   };
 
   const handleEnterAsSuperAdmin = () => {
@@ -377,13 +326,6 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
-    const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
-    fetchToday.then((bList) => {
-      if (bList && bList.length > 0) {
-        setBookings(bList);
-        setStats(api.getCachedStats());
-      }
-    }).catch(() => {});
   };
 
   const handleEnterAsBarber = (barber: Designer) => {
