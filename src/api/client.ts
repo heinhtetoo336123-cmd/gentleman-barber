@@ -174,18 +174,30 @@ function retainSharedListener(key: string, attachFn: () => () => void): () => vo
   };
 }
 
-// Global Firestore Fetch Debounce (3500ms delay) to protect against infinite read loops
-const firestoreFetchTimestamps = new Map<string, number>();
-const FIRESTORE_DEBOUNCE_MS = 3500;
+// GLOBAL FETCH THROTTLE & LOCK (CRITICAL 10-SECOND NETWORK SHIELD)
+let isFetching = false;
+let lastFetchTime = 0;
+const GLOBAL_FETCH_LOCK_TIMEOUT_MS = 10000; // 10 seconds
 
-function shouldThrottleFirestoreFetch(cacheKey: string): boolean {
-  const now = Date.now();
-  const last = firestoreFetchTimestamps.get(cacheKey) || 0;
-  if (now - last < FIRESTORE_DEBOUNCE_MS) {
-    return true; // Throttle! Use local cache
-  }
-  firestoreFetchTimestamps.set(cacheKey, now);
-  return false;
+export function canPerformNetworkFetch(): boolean {
+  if (isFetching) return false;
+  if (Date.now() - lastFetchTime < GLOBAL_FETCH_LOCK_TIMEOUT_MS) return false;
+  return true;
+}
+
+export function tryAcquireFetchLock(): boolean {
+  if (!canPerformNetworkFetch()) return false;
+  isFetching = true;
+  lastFetchTime = Date.now();
+  return true;
+}
+
+export function releaseFetchLock(): void {
+  isFetching = false;
+}
+
+function shouldThrottleFirestoreFetch(_cacheKey?: string): boolean {
+  return !canPerformNetworkFetch();
 }
 
 // Window Storage Event Listener (fallback for browsers where BroadcastChannel is blocked or sandboxed)
@@ -384,12 +396,14 @@ export const api = {
   async getServices(): Promise<Service[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
     const cached = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []).filter(s => !deleted.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-    if (cached.length > 0 || shouldThrottleFirestoreFetch('services')) {
+    if (cached.length > 0 || !canPerformNetworkFetch()) {
       return sortServicesForClient(cached);
     }
+    if (!tryAcquireFetchLock()) return sortServicesForClient(cached);
     try {
       purgeMockServicesFromFirestore();
-      const snap = await getDocs(collection(db, 'services'));
+      const q = query(collection(db, 'services'), limit(20));
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const firestoreList = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as Service))
@@ -401,8 +415,10 @@ export const api = {
       }
     } catch (e) {
       console.warn('Firestore getServices fallback:', e);
+    } finally {
+      releaseFetchLock();
     }
-    return [];
+    return sortServicesForClient(cached);
   },
 
   async addService(service: Partial<Service>): Promise<Service> {
@@ -587,11 +603,13 @@ export const api = {
   async getDesigners(): Promise<Designer[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_DES_KEY);
     const cached = getLocalData<Designer[]>(LOCAL_DESIGNERS_KEY, []).filter(d => !deleted.has(d.id));
-    if (cached.length > 0 || shouldThrottleFirestoreFetch('designers')) {
+    if (cached.length > 0 || !canPerformNetworkFetch()) {
       return cached;
     }
+    if (!tryAcquireFetchLock()) return cached;
     try {
-      const snap = await getDocs(collection(db, 'designers'));
+      const q = query(collection(db, 'designers'), limit(20));
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const firestoreList = snap.docs
           .map(d => {
@@ -610,8 +628,10 @@ export const api = {
       }
     } catch (e) {
       console.warn('Firestore getDesigners fallback:', e);
+    } finally {
+      releaseFetchLock();
     }
-    return [];
+    return cached;
   },
 
   async addDesigner(designer: Partial<Designer>): Promise<Designer> {
@@ -856,7 +876,8 @@ export const api = {
       const q = query(
         collection(db, 'bookings'),
         where('designerId', '==', designerId),
-        where('date', '==', date)
+        where('date', '==', date),
+        limit(20)
       );
       const snap = await getDocs(q);
 
@@ -902,7 +923,8 @@ export const api = {
           collection(db, 'bookings'),
           where('designerId', '==', designerId),
           where('date', '==', date),
-          where('timeSlot', '==', timeSlot)
+          where('timeSlot', '==', timeSlot),
+          limit(20)
         );
         const snap = await getDocs(q);
 
@@ -1003,17 +1025,24 @@ export const api = {
       // Step 4: Targeted Single-Day Query: query ONLY documents where `date == targetDate` (Never load full collection)
       let fetchedForDate: Booking[] = [];
 
-      try {
-        const q = query(collection(db, 'bookings'), where('date', '==', targetDate));
-        let snap;
+      if (!canPerformNetworkFetch()) {
+        return sortBookingsMostRecentFirst(inCacheForDate);
+      }
+      if (tryAcquireFetchLock()) {
         try {
-          snap = await getDocsFromServer(q);
-        } catch {
-          snap = await getDocs(q);
+          const q = query(collection(db, 'bookings'), where('date', '==', targetDate), limit(20));
+          let snap;
+          try {
+            snap = await getDocsFromServer(q);
+          } catch {
+            snap = await getDocs(q);
+          }
+          fetchedForDate = snap.docs.map(parseBookingDoc);
+        } catch (err) {
+          console.warn('Direct Firestore targeted date fetch fallback:', err);
+        } finally {
+          releaseFetchLock();
         }
-        fetchedForDate = snap.docs.map(parseBookingDoc);
-      } catch (err) {
-        console.warn('Direct Firestore targeted date fetch fallback:', err);
       }
 
       fetchedForDate = sortBookingsMostRecentFirst(
@@ -1091,12 +1120,13 @@ export const api = {
       } catch {}
 
       // Step B: Direct Firestore Server Fetch
-      if (fetchedRange.length === 0) {
+      if (fetchedRange.length === 0 && canPerformNetworkFetch() && tryAcquireFetchLock()) {
         try {
           const q = query(
             collection(db, 'bookings'),
             where('date', '>=', sDate),
-            where('date', '<=', eDate)
+            where('date', '<=', eDate),
+            limit(20)
           );
           let snap;
           try {
@@ -1107,6 +1137,8 @@ export const api = {
           fetchedRange = snap.docs.map(parseBookingDoc);
         } catch (err) {
           console.warn('Firestore targeted date range fetch fallback:', err);
+        } finally {
+          releaseFetchLock();
         }
       }
 
@@ -1155,43 +1187,47 @@ export const api = {
       return sortBookingsMostRecentFirst(filtered);
     }
 
-    try {
-      const todayDates = getDeviceTodayQueryDates();
-      const q = todayDates.length > 1
-        ? query(collection(db, 'bookings'), where('date', 'in', todayDates))
-        : query(collection(db, 'bookings'), where('date', '==', todayDates[0]));
+    if (canPerformNetworkFetch() && tryAcquireFetchLock()) {
+      try {
+        const todayDates = getDeviceTodayQueryDates();
+        const q = todayDates.length > 1
+          ? query(collection(db, 'bookings'), where('date', 'in', todayDates), limit(20))
+          : query(collection(db, 'bookings'), where('date', '==', todayDates[0]), limit(20));
 
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const list = sortBookingsMostRecentFirst(
-          snap.docs
-            .map(parseBookingDoc)
-            .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
-        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          const list = sortBookingsMostRecentFirst(
+            snap.docs
+              .map(parseBookingDoc)
+              .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
+          );
 
-        const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-        const idMap = new Map<string, Booking>();
-        existing.forEach(b => idMap.set(b.id, b));
-        list.forEach(b => idMap.set(b.id, b));
-        const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
-        setLocalData(LOCAL_BOOKINGS_KEY, merged);
-        markDatesAsLoaded(todayDates);
-        notifyLocalSubscribers('bookings', merged);
+          const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+          const idMap = new Map<string, Booking>();
+          existing.forEach(b => idMap.set(b.id, b));
+          list.forEach(b => idMap.set(b.id, b));
+          const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+          setLocalData(LOCAL_BOOKINGS_KEY, merged);
+          markDatesAsLoaded(todayDates);
+          notifyLocalSubscribers('bookings', merged);
 
-        let filtered = list;
-        if (options?.designerId) {
-          filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+          let filtered = list;
+          if (options?.designerId) {
+            filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+          }
+          if (options?.status) {
+            filtered = filtered.filter(b => b.status === options.status);
+          }
+          if (options?.limitCount) {
+            filtered = filtered.slice(0, Math.min(options.limitCount, 20));
+          }
+          return sortBookingsMostRecentFirst(filtered);
         }
-        if (options?.status) {
-          filtered = filtered.filter(b => b.status === options.status);
-        }
-        if (options?.limitCount) {
-          filtered = filtered.slice(0, options.limitCount);
-        }
-        return sortBookingsMostRecentFirst(filtered);
+      } catch (e) {
+        console.warn('Firestore getBookings fallback:', e);
+      } finally {
+        releaseFetchLock();
       }
-    } catch (e) {
-      console.warn('Firestore getBookings fallback:', e);
     }
     return sortBookingsMostRecentFirst(cached);
   },
@@ -1206,21 +1242,22 @@ export const api = {
 
   /**
    * Dedicated Admin Dataset Loader:
-   * Safely loads the initial operational bookings with limit(30) to prevent collection read spikes.
+   * Safely loads the initial operational bookings with limit(20) to prevent collection read spikes.
    * Caches locally so subsequent views are 0 cloud reads.
    */
   async loadAdminBookings(): Promise<Booking[]> {
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    if (cached.length > 0 || shouldThrottleFirestoreFetch('admin_bookings')) {
+    if (cached.length > 0 || !canPerformNetworkFetch()) {
       return cached;
     }
+    if (!tryAcquireFetchLock()) return cached;
     try {
-      const q = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'), limit(30));
+      const q = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'), limit(20));
       let snap;
       try {
         snap = await getDocs(q);
       } catch {
-        snap = await getDocs(query(collection(db, 'bookings'), limit(30)));
+        snap = await getDocs(query(collection(db, 'bookings'), limit(20)));
       }
       const list: Booking[] = sortBookingsMostRecentFirst<Booking>(
         snap.docs
@@ -1235,12 +1272,14 @@ export const api = {
     } catch (e) {
       console.warn('loadAdminBookings fallback:', e);
       return cached;
+    } finally {
+      releaseFetchLock();
     }
   },
 
   /**
    * Safe Paginated History Query:
-   * Fetches only 30 records at a time using Firestore limit(30) and startAfter() cursor.
+   * Fetches only 20 records at a time using Firestore limit(20) and startAfter() cursor.
    * Prevents full-collection read spikes when browsing all history.
    */
   async getPaginatedBookings(options?: {
@@ -1248,7 +1287,15 @@ export const api = {
     limitCount?: number;
     date?: string;
   }): Promise<{ bookings: Booking[]; lastDoc: any; hasMore: boolean }> {
-    const pageSize = options?.limitCount || 30;
+    const pageSize = Math.min(options?.limitCount || 20, 20);
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    if (!canPerformNetworkFetch() || !tryAcquireFetchLock()) {
+      return {
+        bookings: cached.slice(0, pageSize),
+        lastDoc: null,
+        hasMore: false
+      };
+    }
     try {
       let constraints: any[] = [];
       if (options?.date) {
@@ -1300,12 +1347,13 @@ export const api = {
       };
     } catch (err: any) {
       console.warn('getPaginatedBookings failed:', err);
-      const local = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
       return {
-        bookings: local.slice(0, pageSize),
+        bookings: cached.slice(0, pageSize),
         lastDoc: null,
         hasMore: false
       };
+    } finally {
+      releaseFetchLock();
     }
   },
 
@@ -1396,11 +1444,15 @@ export const api = {
       return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
     }
 
+    if (!canPerformNetworkFetch() || !tryAcquireFetchLock()) {
+      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+    }
+
     try {
       const q = query(
         collection(db, 'bookings'),
         where('customerPhone', '==', phone.trim()),
-        limit(25)
+        limit(20)
       );
       const snap = await getDocs(q);
       const fetched = snap.docs
@@ -1420,13 +1472,16 @@ export const api = {
     } catch (e) {
       console.warn('getClientBookingsFromCloud warning:', e);
       return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+    } finally {
+      releaseFetchLock();
     }
   },
 
   /**
    * Real-time listener for bookings with Singleton Shared Listener.
-   * Emits local cache immediately at 0ms, then queries today's operational schedule.
-   * Zero arbitrary limit(60) applied - all appointments for today are guaranteed to load.
+   * Emits local cache immediately at 0ms, then keeps local state synchronized in real-time
+   * with a strict limit(20) query to protect against read spikes while ensuring installed apps
+   * receive new bookings instantly without requiring page refresh.
    */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     // 1. Register in-memory & cross-tab sync listener
@@ -1440,25 +1495,46 @@ export const api = {
     }
 
     // 2. Attach or share the single active Firestore onSnapshot listener
-    // Syncs operational bookings collection in real-time across all dates and devices
+    // Hard limit(20) ordered by createdAt desc so installed apps receive new bookings instantly
     const releaseListener = retainSharedListener('bookings', () => {
-      const q = collection(db, 'bookings');
+      const q = query(
+        collection(db, 'bookings'),
+        orderBy('createdAt', 'desc'),
+        limit(20)
+      );
 
       return onSnapshot(
         q,
         (snap) => {
           if (snap.metadata.hasPendingWrites) return;
-          const list = sortBookingsMostRecentFirst(
-            snap.docs
-              .map(parseBookingDoc)
-              .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
-          );
+          const fresh = snap.docs
+            .map(parseBookingDoc)
+            .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())));
+
+          // Merge newly received real-time bookings into local cache without losing existing records
+          const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+          const idMap = new Map<string, Booking>();
+          current.forEach(b => idMap.set(b.id, b));
+          fresh.forEach(b => idMap.set(b.id, b));
+          const list = sortBookingsMostRecentFirst(Array.from(idMap.values()));
 
           setLocalData(LOCAL_BOOKINGS_KEY, list);
           notifyLocalSubscribers('bookings', list);
         },
         (error) => {
-          console.warn('subscribeToBookings snapshot warning:', error);
+          console.warn('subscribeToBookings snapshot index warning, using fallback query:', error);
+          const fallbackQ = query(collection(db, 'bookings'), limit(20));
+          return onSnapshot(fallbackQ, (snap) => {
+            if (snap.metadata.hasPendingWrites) return;
+            const fresh = snap.docs.map(parseBookingDoc);
+            const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+            const idMap = new Map<string, Booking>();
+            current.forEach(b => idMap.set(b.id, b));
+            fresh.forEach(b => idMap.set(b.id, b));
+            const list = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+            setLocalData(LOCAL_BOOKINGS_KEY, list);
+            notifyLocalSubscribers('bookings', list);
+          });
         }
       );
     });
