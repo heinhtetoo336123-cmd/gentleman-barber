@@ -156,8 +156,9 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   // View Mode: Timeline View vs Table View (Defaults to Timeline Most Recent First)
   const [historyViewMode, setHistoryViewMode] = useState<'timeline' | 'table'>('timeline');
 
-  // Delete Record Confirmation State
+  // Delete Record Confirmation State & Optimistic Instant Purge Set
   const [recordToDelete, setRecordToDelete] = useState<Booking | null>(null);
+  const [deletedBookingIds, setDeletedBookingIds] = useState<Set<string>>(new Set());
 
   // Quick Action Detail / Receipt Modal State
   const [activeBookingDetail, setActiveBookingDetail] = useState<Booking | null>(null);
@@ -310,11 +311,17 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   // All Walk-in Bookings across the entire dataset (Latest First)
   const sourceWalkinBookings = useMemo(() => {
     const idMap = new Map<string, Booking>();
-    (bookings || []).forEach((b) => idMap.set(b.id, b));
-    (periodBookings || []).forEach((b) => idMap.set(b.id, b));
-    api.getCachedBookings().forEach((b) => idMap.set(b.id, b));
+    (bookings || []).forEach((b) => {
+      if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
+    });
+    (periodBookings || []).forEach((b) => {
+      if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
+    });
+    api.getCachedBookings().forEach((b) => {
+      if (!deletedBookingIds.has(b.id)) idMap.set(b.id, b);
+    });
     return Array.from(idMap.values());
-  }, [bookings, periodBookings]);
+  }, [bookings, periodBookings, deletedBookingIds]);
 
   const allWalkinBookings = useMemo(() => {
     return (sourceWalkinBookings || [])
@@ -389,18 +396,6 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
         }
       }
 
-      if (typeof formData.customPrice === 'number' && formData.customPrice >= 0 && formData.customPrice !== selectedSrv?.price) {
-        const commPercent = selectedDes?.commissionPercent ?? 50;
-        const finalNet = Math.max(0, unitPrice - (formData.discountAmount || 0));
-        const commissionAmount = Math.round((finalNet * commPercent) / 100);
-        await api.updateBooking(newBk.id, {
-          servicePrice: unitPrice,
-          commissionAmount,
-          servicesList: formData.servicesList,
-          retailItems: formData.retailItems
-        });
-      }
-
       onRefresh();
       showToast(
         lang === 'my'
@@ -433,23 +428,36 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
     }
   };
 
-  // Delete Record
+  // Delete Record with True Optimistic UI (0ms Instant Removal)
   const handleConfirmDelete = async () => {
     if (!recordToDelete) return;
-    setLoading(true);
+    const targetBooking = recordToDelete;
+    const targetId = recordToDelete.id;
+
+    // 1. Immediately close confirmation dialog & optimistic local state purge (0ms instant visual removal)
+    setRecordToDelete(null);
+    setDeletedBookingIds((prev) => new Set(prev).add(targetId));
+    setPeriodBookings((prev) => (prev ? prev.filter((b) => b.id !== targetId) : []));
+
+    showToast(
+      lang === 'my'
+        ? `Walk-in မှတ်တမ်း (${targetBooking.bookingCode || targetBooking.id}) အား စာရင်းမှ ပယ်ဖျက်လိုက်ပါပြီ`
+        : `Walk-in record ${targetBooking.bookingCode || targetBooking.id} deleted!`
+    );
+
+    // 2. Background Firestore delete (Strictly 1 single write: deleteDoc)
     try {
-      await api.deleteBooking(recordToDelete.id);
-      showToast(
-        lang === 'my'
-          ? `Walk-in မှတ်တမ်း (${recordToDelete.bookingCode}) အား စာရင်းမှ ပယ်ဖျက်ပြီးပါပြီ`
-          : `Walk-in record ${recordToDelete.bookingCode} deleted!`
-      );
-      setRecordToDelete(null);
+      await api.deleteBooking(targetId);
       onRefresh();
     } catch (err: any) {
-      showToast(err.message || 'Failed to delete record', 'error');
-    } finally {
-      setLoading(false);
+      // Revert if background delete fails
+      setDeletedBookingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(targetId);
+        return next;
+      });
+      setPeriodBookings((prev) => (prev ? [targetBooking, ...prev] : [targetBooking]));
+      showToast(err.message || 'Failed to delete record from cloud', 'error');
     }
   };
 

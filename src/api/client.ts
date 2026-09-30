@@ -371,46 +371,11 @@ const inMemoryDateBookingsCache = new Map<string, Booking[]>();
 
 /**
  * Cache Invalidation Helper:
- * Clears in-memory caches, sessionStorage range entries, and notifies active UI subscribers
+ * Pure local in-memory helper (DO NOT dispatch global invalidation events or wipe caches).
+ * Real-time onSnapshot listeners and local states handle reactive UI updates directly.
  */
-export function invalidateBookingDateCache(date?: string, bookingId?: string) {
-  if (date) {
-    const cleanDate = date.split('T')[0];
-    inMemoryDateBookingsCache.delete(cleanDate);
-    // Also remove any range keys containing this date
-    for (const key of Array.from(inMemoryDateBookingsCache.keys())) {
-      if (key.includes(cleanDate) || key.includes('_')) {
-        inMemoryDateBookingsCache.delete(key);
-      }
-    }
-  } else {
-    inMemoryDateBookingsCache.clear();
-  }
-
-  // Clear sessionStorage range caches
-  if (typeof sessionStorage !== 'undefined') {
-    try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const k = sessionStorage.key(i);
-        if (k && k.startsWith('baba_matrix_range_')) {
-          if (!date || k.includes(date.split('T')[0])) {
-            keysToRemove.push(k);
-          }
-        }
-      }
-      keysToRemove.forEach((k) => sessionStorage.removeItem(k));
-    } catch {}
-  }
-
-  // Dispatch browser custom event for instant 0ms UI reactivity
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(
-      new CustomEvent('baba_booking_invalidated', {
-        detail: { date, bookingId }
-      })
-    );
-  }
+export function invalidateBookingDateCache(_date?: string, _bookingId?: string) {
+  // Intentionally NO-OP to prevent re-fetch cascade loops across mounted components.
 }
 
 export const api = {
@@ -1767,6 +1732,7 @@ export const api = {
     };
 
     try {
+      // Strictly 1 Firestore write: touch ONLY the target document in bookings collection
       await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
 
       const notifId = `notif-wlk-${Date.now()}`;
@@ -1824,13 +1790,11 @@ export const api = {
         saveMyBookingId(newBooking.id, newBooking.bookingCode, newBooking.customerPhone);
       }
 
+      // Update local storage and subscribers ONLY (0 secondary Firestore writes)
       const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
       const allUpdatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
       setLocalData(LOCAL_NOTIFS_KEY, allUpdatedNotifs);
       notifyLocalSubscribers('notifications', allUpdatedNotifs);
-
-      // Dispatch to cross-device cloud queue so Barber/Client get it in real-time on other devices
-      notifsToSave.forEach(n => this.dispatchCrossDeviceNotification(n).catch(() => {}));
     } catch (e) {
       console.warn('Firestore createWalkinBooking fallback:', e);
     }
@@ -1840,27 +1804,27 @@ export const api = {
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
 
-    const isAnonymous = !newBooking.customerName || [
-      'walk-in guest',
-      'walkin guest',
-      'walk-in',
-      'walkin',
-      'guest',
-      'ဧည့်သည်',
-      'ဆိုင်ရောက် ဧည့်သည်'
-    ].includes(newBooking.customerName.trim().toLowerCase());
-
-    if (!isAnonymous || (newBooking.customerPhone && newBooking.customerPhone.trim().length >= 4)) {
+    // Update local client profile in-memory cache ONLY (0 secondary Firestore writes)
+    if (newBooking.customerPhone && newBooking.customerPhone.trim().length >= 4) {
       try {
-        await this.syncOrLinkClientAccount({
-          name: newBooking.customerName,
-          phone: newBooking.customerPhone || '',
-          preferredBarberName: newBooking.designerName,
-          source: 'walkin_booking',
-        });
-      } catch (clientSyncErr) {
-        console.warn('Client auto-registration sync skipped:', clientSyncErr);
-      }
+        const cleanPhone = normalizePhoneNumber(newBooking.customerPhone);
+        const existingClients = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
+        const found = existingClients.find(c => c.phone && phonesMatch(c.phone, cleanPhone));
+        if (!found) {
+          const newProfile: UserProfile = {
+            id: `usr-${cleanPhone || Date.now()}`,
+            name: newBooking.customerName || 'Walk-in Client',
+            phone: newBooking.customerPhone,
+            points: 0,
+            joinedDate: now,
+            preferredBarberName: newBooking.designerName,
+            memberTier: 'Bronze',
+          };
+          const updatedClients = [newProfile, ...existingClients];
+          setLocalData(LOCAL_CLIENTS_KEY, updatedClients);
+          notifyLocalSubscribers('clients', updatedClients);
+        }
+      } catch {}
     }
 
     return newBooking;
@@ -2081,11 +2045,18 @@ export const api = {
     notifyLocalSubscribers('bookings', updated);
     invalidateBookingDateCache(targetDate, id);
 
-    // 2. Direct document mutation: delete strictly by Document ID (0 collection re-fetch)
+    // 2. Direct document mutation: touch ONLY the single target document in bookings collection (strictly 1 write)
     try {
       await deleteDoc(doc(db, 'bookings', id));
     } catch (e) {
       console.warn('Firestore direct deleteDoc error:', e);
+      // Revert local state if cloud delete fails
+      if (target) {
+        const rollback = [target, ...getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.id !== id)];
+        setLocalData(LOCAL_BOOKINGS_KEY, rollback);
+        notifyLocalSubscribers('bookings', rollback);
+      }
+      throw e;
     }
     return true;
   },
@@ -2676,7 +2647,7 @@ export const api = {
     source?: 'client_app' | 'online_booking' | 'walkin_booking' | 'admin_manual';
   }): Promise<{ linked: boolean; isNew: boolean; client: UserProfile; message: string }> {
     const source = userData.source || 'client_app';
-    const existingClients = await this.getClients();
+    const existingClients = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
 
     // Find match by phone number or exact unique name
     const cleanPhone = userData.phone ? normalizePhoneNumber(userData.phone) : '';
