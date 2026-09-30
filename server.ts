@@ -2,6 +2,8 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, collection, query, where, getDocs, limit } from "firebase/firestore";
 import { Service, Designer, Booking, NotificationItem, BookingStatus, AppStats, PaymentSettings, UserProfile, PromoCode } from "./src/types.js";
 
 const STORE_FILE = path.join(process.cwd(), 'data', 'store.json');
@@ -52,6 +54,15 @@ function loadStoreFromFile() {
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Domain Redirection: Forward babashop-booking-sys.ai.studio to official custom domain
+  app.use((req, res, next) => {
+    const host = req.headers.host || '';
+    if (host.includes('babashop-booking-sys.ai.studio')) {
+      return res.redirect(301, `https://gentlemanbarbershopmyeikbooking.com${req.originalUrl}`);
+    }
+    next();
+  });
 
   app.use(express.json());
 
@@ -255,6 +266,56 @@ async function startServer() {
   // Bookings CRUD
   app.get("/api/bookings", (_req, res) => {
     res.json(bookings);
+  });
+
+  // Direct Firestore Historical & Targeted Bookings Proxy (Fast, Quota-Safe, Strips Bloated Images)
+  app.get("/api/firestore/bookings", async (req, res) => {
+    try {
+      const { date, startDate, endDate } = req.query as {
+        date?: string;
+        startDate?: string;
+        endDate?: string;
+      };
+
+      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+      if (!fs.existsSync(configPath)) {
+        return res.status(404).json({ error: "Firebase configuration not found" });
+      }
+
+      const firestoreConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      const appInst = getApps().length === 0 ? initializeApp(firestoreConfig) : getApps()[0];
+      const firestoreDb = getFirestore(appInst, firestoreConfig.firestoreDatabaseId);
+
+      const bookingsCol = collection(firestoreDb, 'bookings');
+      let q;
+
+      if (date && date.trim()) {
+        q = query(bookingsCol, where('date', '==', date.trim()));
+      } else if (startDate && endDate) {
+        q = query(bookingsCol, where('date', '>=', startDate.trim()), where('date', '<=', endDate.trim()));
+      } else {
+        q = query(bookingsCol, limit(50));
+      }
+
+      const snap = await getDocs(q);
+      const docs = snap.docs.map((d) => {
+        const data = d.data();
+        const cleaned: any = Object.assign({}, data, { id: d.id });
+        // Strip huge base64 strings so client receives light payload in milliseconds
+        if (typeof cleaned.designerAvatar === 'string' && cleaned.designerAvatar.startsWith('data:image')) {
+          cleaned.designerAvatar = '';
+        }
+        if (typeof cleaned.paymentSlipUrl === 'string' && cleaned.paymentSlipUrl.startsWith('data:image')) {
+          cleaned.paymentSlipUrl = '';
+        }
+        return cleaned;
+      });
+
+      res.json(docs);
+    } catch (err: any) {
+      console.warn("Firestore bookings proxy error:", err.message);
+      res.status(500).json({ error: err.message || "Failed to fetch bookings from Firestore" });
+    }
   });
 
   app.post("/api/bookings", (req, res) => {

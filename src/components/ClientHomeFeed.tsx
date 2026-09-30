@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Service, Designer, UserRole, Booking, PaymentSettings } from '../types';
 import { Language, translations } from '../data/i18n';
 import { formatPrice, calculateBarberRating, sortServicesForClient } from '../utils/formatters';
 import { getClientBookings } from '../utils/notifications';
+import { api } from '../api/client';
 import {
   Scissors,
   Sparkles,
@@ -117,14 +118,39 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
     { id: 'Dreadlock' as const, label: 'Dreadlock', labelMy: 'ဒရက်လော့', icon: Sparkles },
   ];
 
-  // Filtered Services based on Category Block (Strictly sorted by custom admin order or default Hair Cut first)
-  const filteredServices = sortServicesForClient(
-    services.filter((s) => {
-      if (!s.active) return false;
-      if (activeTab !== 'all' && s.category !== activeTab) return false;
-      return true;
-    })
-  );
+  // Real-time reactive copy of services for immediate re-render on reorder event
+  const [liveServices, setLiveServices] = useState<Service[]>(() => services);
+
+  useEffect(() => {
+    setLiveServices(services);
+  }, [services]);
+
+  useEffect(() => {
+    const handleReorderEvent = (e: any) => {
+      const fresh = e.detail || api.getCachedServices();
+      if (Array.isArray(fresh) && fresh.length > 0) {
+        setLiveServices([...fresh]);
+      }
+    };
+    window.addEventListener('baba_services_reordered', handleReorderEvent);
+    window.addEventListener('baba_sync_services', handleReorderEvent);
+    return () => {
+      window.removeEventListener('baba_services_reordered', handleReorderEvent);
+      window.removeEventListener('baba_sync_services', handleReorderEvent);
+    };
+  }, []);
+
+  const sourceServices = liveServices && liveServices.length > 0 ? liveServices : services;
+
+  // Strictly sorted by Service Menu categories (Hair Cut first, Shampoo, Colour, Perming, Dreadlock)
+  const displayServices = sortServicesForClient(sourceServices);
+
+  // Filtered Services based on Category Block (Strictly sorted by custom order)
+  const filteredServices = displayServices.filter((s) => {
+    if (!s.active) return false;
+    if (activeTab !== 'all' && s.category !== activeTab) return false;
+    return true;
+  });
 
   // Any Professional object
   const anyProfessional: Designer = {

@@ -95,6 +95,27 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
   const [selectedYear, setSelectedYear] = useState<string>(currentYear);
   const [statementViewType, setStatementViewType] = useState<'monthly' | 'yearly'>('monthly');
+  const [historicalReportBookings, setHistoricalReportBookings] = useState<Booking[]>([]);
+
+  // On-Demand Historical Records: Only fetch when a specific month or year statement is selected
+  useEffect(() => {
+    const startDate = `${selectedMonth}-01`;
+    const endDate = `${selectedMonth}-31`;
+    api.getHistoricalBookings({ startDate, endDate, limitCount: 30 })
+      .then(res => {
+        if (res.bookings && res.bookings.length > 0) {
+          setHistoricalReportBookings(res.bookings);
+        }
+      })
+      .catch(e => console.warn('SuperAdminReportsManager on-demand fetch warning:', e));
+  }, [selectedMonth]);
+
+  const allAvailableBookings = useMemo(() => {
+    const idMap = new Map<string, Booking>();
+    bookings.forEach(b => idMap.set(b.id, b));
+    historicalReportBookings.forEach(b => idMap.set(b.id, b));
+    return Array.from(idMap.values());
+  }, [bookings, historicalReportBookings]);
 
   // Print mode styling ref
   const printRef = useRef<HTMLDivElement>(null);
@@ -107,7 +128,7 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
 
   // 1. Monthly Financial Computation
   const monthlyStats = useMemo(() => {
-    const monthBookings = bookings.filter((b) => (b.date || '').startsWith(selectedMonth) && b.status !== 'cancelled');
+    const monthBookings = allAvailableBookings.filter((b) => (b.date || '').startsWith(selectedMonth) && b.status !== 'cancelled');
     const completedBookings = monthBookings.filter((b) => b.status === 'completed');
     
     let grossRev = 0;

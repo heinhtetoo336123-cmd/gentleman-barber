@@ -268,9 +268,9 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
 
     const matchesSearch =
       feedbackSearchTerm === '' ||
-      b.customerName.toLowerCase().includes(feedbackSearchTerm.toLowerCase()) ||
-      b.customerPhone.includes(feedbackSearchTerm) ||
-      b.bookingCode.toLowerCase().includes(feedbackSearchTerm.toLowerCase()) ||
+      (b.customerName || '').toLowerCase().includes(feedbackSearchTerm.toLowerCase()) ||
+      (b.customerPhone || '').includes(feedbackSearchTerm) ||
+      (b.bookingCode || b.id || '').toLowerCase().includes(feedbackSearchTerm.toLowerCase()) ||
       (b.reviewNote && b.reviewNote.toLowerCase().includes(feedbackSearchTerm.toLowerCase()));
 
     return matchesRating && matchesDesigner && matchesSearch;

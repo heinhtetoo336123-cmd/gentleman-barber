@@ -31,7 +31,8 @@ import {
   Edit3,
   DollarSign,
   Save,
-  AlertCircle
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 
 interface BookingManagerProps {
@@ -54,6 +55,27 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [sortMode, setSortMode] = useState<'timeline_recent' | 'booked_recent'>('timeline_recent');
+  const [dateBookings, setDateBookings] = useState<Booking[] | null>(null);
+  const [loadingDate, setLoadingDate] = useState(false);
+
+  // On-Demand Date Fetcher: Automatically loads past date records directly into state and cache
+  React.useEffect(() => {
+    if (selectedDate && selectedDate.trim()) {
+      setLoadingDate(true);
+      api.getBookings({ date: selectedDate })
+        .then((fetched) => {
+          setDateBookings(fetched || []);
+        })
+        .catch((err) => {
+          console.warn('BookingManager on-demand date load error:', err);
+        })
+        .finally(() => {
+          setLoadingDate(false);
+        });
+    } else {
+      setDateBookings(null);
+    }
+  }, [selectedDate]);
 
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [viewingSlipUrl, setViewingSlipUrl] = useState<string | null>(null);
@@ -232,16 +254,25 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
     }
   };
 
+  const sourceBookings = React.useMemo(() => {
+    const idMap = new Map<string, Booking>();
+    (bookings || []).forEach((b) => idMap.set(b.id, b));
+    (dateBookings || []).forEach((b) => idMap.set(b.id, b));
+    api.getCachedBookings().forEach((b) => idMap.set(b.id, b));
+    return Array.from(idMap.values());
+  }, [bookings, dateBookings]);
+
   const filteredBookings = React.useMemo(() => {
-    const list = bookings.filter((b) => {
+    const list = sourceBookings.filter((b) => {
       const matchesStatus = statusFilter === 'all' || b.status === statusFilter;
-      const matchesDate = !selectedDate || b.date === selectedDate;
+      const bDate = (b.date || '').split('T')[0];
+      const matchesDate = !selectedDate || bDate === selectedDate;
       const matchesSearch =
-        b.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.bookingCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.serviceName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.designerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.customerPhone.toLowerCase().includes(searchTerm.toLowerCase());
+        (b.customerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (b.bookingCode || b.id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (b.serviceName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (b.designerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (b.customerPhone || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       return matchesStatus && matchesDate && matchesSearch;
     });
@@ -257,7 +288,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
 
     // Default: 'timeline_recent' (Strictly sorted by Most Recent Appointment Timeline)
     return sortBookingsMostRecentFirst(list);
-  }, [bookings, statusFilter, selectedDate, searchTerm, sortMode]);
+  }, [sourceBookings, statusFilter, selectedDate, searchTerm, sortMode]);
 
   const pendingCount = bookings.filter((b) => b.status === 'pending').length;
 
@@ -317,6 +348,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
           </div>
 
           <div className="flex items-center space-x-1.5 shrink-0">
+            {loadingDate && <Loader2 className="w-4 h-4 animate-spin text-emerald-600 shrink-0" />}
             <input
               type="date"
               value={selectedDate}
@@ -402,7 +434,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center space-x-2 min-w-0 flex-1">
                     <span className="font-mono font-black text-emerald-900 bg-emerald-100/80 px-2 py-0.5 rounded text-xs border border-emerald-300/80 shrink-0">
-                      {b.bookingCode}
+                      {b.bookingCode || b.id}
                     </span>
                     <h4 className="font-bold text-xs sm:text-sm text-stone-900 truncate">
                       {b.serviceName}

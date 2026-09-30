@@ -3,6 +3,8 @@ import { Service, Designer, Booking, ShopExpense, RetailSale } from '../types';
 import { formatPrice } from '../utils/formatters';
 import { getLocalTodayStr } from '../utils/timeSlots';
 import { api } from '../api/client';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import {
   Calendar,
   Download,
@@ -27,7 +29,8 @@ import {
   Plus,
   Equal,
   CreditCard,
-  DollarSign
+  DollarSign,
+  Loader2
 } from 'lucide-react';
 
 interface AdminServiceBarberMatrixTableProps {
@@ -41,6 +44,9 @@ type ValueDisplayMode = 'both' | 'count' | 'revenue';
 type StatusFilterMode = 'all_valid' | 'completed_only';
 type MatrixLayoutMode = 'auto' | 'cards' | 'table';
 
+// Module-level in-memory cache to guarantee 0 Firestore reads on repeated date selections
+const matrixDateBookingsCache = new Map<string, any[]>();
+
 export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTableProps> = ({
   services,
   designers,
@@ -52,6 +58,175 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
   // Filter States: Clean Date Range (defaults to today)
   const [startDate, setStartDate] = useState<string>(todayStr);
   const [endDate, setEndDate] = useState<string>(todayStr);
+  const [tableBookings, setTableBookings] = useState<any[]>(bookings || []);
+  const [isMatrixLoading, setIsMatrixLoading] = useState(false);
+
+  // Sync today's bookings when on today
+  useEffect(() => {
+    if (startDate === todayStr && endDate === todayStr) {
+      setTableBookings(bookings || []);
+    }
+  }, [bookings, startDate, endDate, todayStr]);
+
+  // Listen for real-time cache invalidation events (e.g. when an old or new booking is deleted/edited)
+  useEffect(() => {
+    const handleInvalidation = (e: any) => {
+      const { date, bookingId } = e.detail || {};
+
+      // 1. Invalidate matching in-memory cache keys
+      if (date) {
+        const cleanDate = date.split('T')[0];
+        for (const k of Array.from(matrixDateBookingsCache.keys())) {
+          if (k.includes(cleanDate)) {
+            matrixDateBookingsCache.delete(k);
+          }
+        }
+      } else {
+        matrixDateBookingsCache.clear();
+      }
+
+      // 2. Optimistically remove deleted booking from active table state in 0ms!
+      if (bookingId) {
+        setTableBookings((prev) => prev.filter((b) => b.id !== bookingId));
+      }
+    };
+
+    window.addEventListener('baba_booking_invalidated', handleInvalidation);
+    return () => {
+      window.removeEventListener('baba_booking_invalidated', handleInvalidation);
+    };
+  }, []);
+
+  // Listen to bookings subscription to keep tableBookings synced if any records update locally
+  useEffect(() => {
+    const unsub = api.subscribeToBookings((all) => {
+      if (all && all.length > 0) {
+        setTableBookings((prev) => {
+          if (!prev || prev.length === 0) return prev;
+          const freshMap = new Map(all.map((b) => [b.id, b]));
+          let hasDiff = false;
+          const next = prev.map((item) => {
+            const fresh = freshMap.get(item.id);
+            if (fresh && (fresh.status !== item.status || fresh.price !== item.price || fresh.servicePrice !== item.servicePrice || fresh.serviceName !== item.serviceName)) {
+              hasDiff = true;
+              return { ...item, ...fresh };
+            }
+            return item;
+          });
+          return hasDiff ? next : prev;
+        });
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Query Firestore directly with cache-first strategy when date range changes
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (startDate && endDate) {
+      if (startDate === todayStr && endDate === todayStr) {
+        setTableBookings(bookings || []);
+        setIsMatrixLoading(false);
+        return;
+      }
+
+      const cacheKey = `${startDate}_${endDate}`;
+
+      // 1. In-memory cache hit: 0 network, 0 cloud reads!
+      if (matrixDateBookingsCache.has(cacheKey)) {
+        setTableBookings(matrixDateBookingsCache.get(cacheKey) || []);
+        setIsMatrixLoading(false);
+        return;
+      }
+
+      // 2. SessionStorage cache hit: 0 network, 0 cloud reads (survives tab switches)
+      try {
+        const sessionSaved = sessionStorage.getItem(`baba_matrix_range_${cacheKey}`);
+        if (sessionSaved) {
+          const parsed = JSON.parse(sessionSaved);
+          if (Array.isArray(parsed)) {
+            matrixDateBookingsCache.set(cacheKey, parsed);
+            setTableBookings(parsed);
+            setIsMatrixLoading(false);
+            return;
+          }
+        }
+      } catch {}
+
+      // 3. Persistent local cache hit check
+      const localCached = api.getCachedBookings();
+      const inRangeCached = (localCached || []).filter(
+        (b) => b.date && b.date >= startDate && b.date <= endDate
+      );
+      if (inRangeCached.length > 0) {
+        matrixDateBookingsCache.set(cacheKey, inRangeCached);
+        setTableBookings(inRangeCached);
+        setIsMatrixLoading(false);
+        return;
+      }
+
+      setIsMatrixLoading(true);
+
+      const fetchDateRange = async () => {
+        try {
+          const q = query(
+            collection(db, 'bookings'),
+            where('date', '>=', startDate),
+            where('date', '<=', endDate)
+          );
+          const snap = await getDocs(q);
+          const fetched = snap.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data()
+          }));
+          if (!isCancelled) {
+            matrixDateBookingsCache.set(cacheKey, fetched);
+            setTableBookings(fetched);
+
+            // Persist to sessionStorage for instant 0-read restore
+            try {
+              sessionStorage.setItem(`baba_matrix_range_${cacheKey}`, JSON.stringify(fetched));
+            } catch {}
+
+            // Merge into persistent local bookings cache
+            try {
+              const currentCached = api.getCachedBookings() || [];
+              const idMap = new Map<string, any>();
+              currentCached.forEach((b) => idMap.set(b.id, b));
+              fetched.forEach((b: any) => idMap.set(b.id, b));
+              const merged = Array.from(idMap.values());
+              localStorage.setItem('babashop_bookings_v2', JSON.stringify(merged));
+            } catch {}
+          }
+        } catch (err) {
+          console.warn('Direct Firestore fetch error in Matrix Table:', err);
+          try {
+            const fallback = startDate === endDate
+              ? await api.getBookings({ date: startDate })
+              : await api.getBookings({ startDate, endDate });
+            if (!isCancelled && fallback) {
+              matrixDateBookingsCache.set(cacheKey, fallback);
+              setTableBookings(fallback);
+              try {
+                sessionStorage.setItem(`baba_matrix_range_${cacheKey}`, JSON.stringify(fallback));
+              } catch {}
+            }
+          } catch {}
+        } finally {
+          if (!isCancelled) {
+            setIsMatrixLoading(false);
+          }
+        }
+      };
+
+      fetchDateRange();
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [startDate, endDate, todayStr, bookings]);
 
   // Live Expenses & Retail Sales Subscriptions
   const [allExpenses, setAllExpenses] = useState<ShopExpense[]>([]);
@@ -89,7 +264,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
   // Filtered Bookings for the Matrix
   const filteredBookings = useMemo(() => {
-    return bookings.filter((b) => {
+    return (tableBookings || []).filter((b) => {
       // Status Filter
       if (statusFilter === 'completed_only') {
         if (b.status !== 'completed') return false;
@@ -99,13 +274,13 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       }
 
       // Date Filtering
-      const bDate = b.date || '';
+      const bDate = (b.date || '').split('T')[0];
       if (startDate && bDate < startDate) return false;
       if (endDate && bDate > endDate) return false;
 
       return true;
     });
-  }, [bookings, startDate, endDate, statusFilter]);
+  }, [tableBookings, startDate, endDate, statusFilter]);
 
   // Build Matrix Data: Map [serviceId][designerId] -> { count, revenue }
   const matrixData = useMemo(() => {
@@ -163,7 +338,8 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     let onlineRevenue = 0;
 
     filteredBookings.forEach((b) => {
-      const isWlk = b.isWalkin === true || b.bookingCode.startsWith('WLK-') || (b.notes && b.notes.toLowerCase().includes('walk-in'));
+      const code = (typeof b.bookingCode === 'string' ? b.bookingCode : (typeof b.id === 'string' ? b.id : '')).toUpperCase();
+      const isWlk = b.isWalkin === true || (typeof code?.startsWith === 'function' && code.startsWith('WLK-')) || ((b.notes || '').toLowerCase().includes('walk-in'));
       const net = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
       const isCompleted = b.status === 'completed';
       if (isWlk) {
@@ -638,6 +814,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
         {/* Compact Mini Date Inputs */}
         <div className="flex items-center flex-wrap gap-1.5">
+          {isMatrixLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 shrink-0" />}
           <div className="flex items-center space-x-1 bg-stone-50 border border-stone-200 rounded-lg px-2 py-0.5 font-mono text-xs shadow-2xs">
             <span className="text-stone-400 font-bold text-[10px] shrink-0">{lang === 'my' ? 'မှ:' : 'From:'}</span>
             <input

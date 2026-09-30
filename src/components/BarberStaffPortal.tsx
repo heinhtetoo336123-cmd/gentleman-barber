@@ -308,10 +308,10 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
       // Search Query Filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchName = b.customerName.toLowerCase().includes(q);
-        const matchPhone = b.customerPhone.toLowerCase().includes(q);
-        const matchCode = b.bookingCode.toLowerCase().includes(q);
-        const matchService = b.serviceName.toLowerCase().includes(q);
+        const matchName = (b.customerName || '').toLowerCase().includes(q);
+        const matchPhone = (b.customerPhone || '').toLowerCase().includes(q);
+        const matchCode = (b.bookingCode || b.id || '').toLowerCase().includes(q);
+        const matchService = (b.serviceName || '').toLowerCase().includes(q);
         if (!matchName && !matchPhone && !matchCode && !matchService) return false;
       }
 

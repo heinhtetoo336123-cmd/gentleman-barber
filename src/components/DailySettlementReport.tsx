@@ -70,7 +70,53 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
   // Live Expenses & Retail Sales Subscriptions
   const [allExpenses, setAllExpenses] = useState<ShopExpense[]>([]);
   const [allRetailSales, setAllRetailSales] = useState<RetailSale[]>([]);
-  
+  const [historicalBookings, setHistoricalBookings] = useState<Booking[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // On-Demand Historical Records: Only fetch when past dates or months are selected
+  useEffect(() => {
+    if (reportRangeMode === 'single' && selectedDate === todayStr) {
+      return;
+    }
+    setIsLoadingHistory(true);
+    let startDate: string | undefined;
+    let endDate: string | undefined;
+
+    if (reportRangeMode === 'single') {
+      startDate = selectedDate;
+      endDate = selectedDate;
+    } else if (reportRangeMode === 'month') {
+      const ym = selectedDate.substring(0, 7);
+      startDate = `${ym}-01`;
+      endDate = `${ym}-31`;
+    }
+
+    const fetchPromise = reportRangeMode === 'single'
+      ? api.getBookings({ date: selectedDate })
+      : api.getBookings({ startDate, endDate });
+
+    fetchPromise
+      .then(bList => {
+        if (bList && bList.length > 0) {
+          setHistoricalBookings(bList);
+        }
+      })
+      .catch(err => {
+        console.warn('DailySettlement on-demand historical fetch warning:', err);
+      })
+      .finally(() => {
+        setIsLoadingHistory(false);
+      });
+  }, [selectedDate, reportRangeMode, todayStr]);
+
+  const combinedBookings = useMemo(() => {
+    const idMap = new Map<string, Booking>();
+    (bookings || []).forEach(b => idMap.set(b.id, b));
+    (historicalBookings || []).forEach(b => idMap.set(b.id, b));
+    api.getCachedBookings().forEach(b => idMap.set(b.id, b));
+    return Array.from(idMap.values());
+  }, [bookings, historicalBookings]);
+
   // Settlement tracking
   const [settledBarbers, setSettledBarbers] = useState<Record<string, boolean>>(() => {
     try {
@@ -110,7 +156,7 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
 
   // Filter bookings according to range mode with robust ISO and date extraction
   const activeBookings = useMemo(() => {
-    return bookings.filter(b => {
+    return combinedBookings.filter(b => {
       if (b.status === 'cancelled') return false;
       const bDate = (b.date || '').split('T')[0];
       const sDate = (selectedDate || '').split('T')[0];
@@ -123,7 +169,7 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
       }
       return true;
     });
-  }, [bookings, selectedDate, reportRangeMode]);
+  }, [combinedBookings, selectedDate, reportRangeMode]);
 
   // Filter expenses according to range mode
   const activeExpenses = useMemo(() => {
@@ -364,11 +410,11 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
       // Search query filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchName = b.customerName.toLowerCase().includes(q);
-        const matchCode = b.bookingCode.toLowerCase().includes(q);
-        const matchPhone = b.customerPhone?.toLowerCase().includes(q);
-        const matchService = b.serviceName.toLowerCase().includes(q);
-        const matchStylist = b.designerName.toLowerCase().includes(q);
+        const matchName = (b.customerName || '').toLowerCase().includes(q);
+        const matchCode = (b.bookingCode || b.id || '').toLowerCase().includes(q);
+        const matchPhone = (b.customerPhone || '').toLowerCase().includes(q);
+        const matchService = (b.serviceName || '').toLowerCase().includes(q);
+        const matchStylist = (b.designerName || '').toLowerCase().includes(q);
         return matchName || matchCode || matchPhone || matchService || matchStylist;
       }
 

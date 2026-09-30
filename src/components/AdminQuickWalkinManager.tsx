@@ -80,6 +80,75 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   const [historyDesignerFilter, setHistoryDesignerFilter] = useState<string>('all');
   const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('all');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<string>('all');
+  const [periodBookings, setPeriodBookings] = useState<Booking[] | null>(null);
+  const [loadingPeriod, setLoadingPeriod] = useState(false);
+
+  // Load all operational bookings on mount for zero-lag filtering
+  useEffect(() => {
+    api.loadAdminBookings().then((res) => {
+      if (res && res.length > 0) {
+        setPeriodBookings(res);
+      }
+    }).catch(() => {});
+  }, []);
+
+  // On-Demand Historical Walk-ins Fetcher (Cache-First)
+  useEffect(() => {
+    let startDate: string | undefined;
+    let endDate: string | undefined;
+
+    if (historyPeriodFilter === 'yesterday') {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yStr = yesterday.toISOString().split('T')[0];
+      startDate = yStr;
+      endDate = yStr;
+    } else if (historyPeriodFilter === 'this_week') {
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      startDate = weekAgo.toISOString().split('T')[0];
+      endDate = todayStr;
+    } else if (historyPeriodFilter === 'this_month') {
+      const ym = todayStr.substring(0, 7);
+      startDate = `${ym}-01`;
+      endDate = todayStr;
+    } else if (historyPeriodFilter === 'custom') {
+      if (historyCustomStartDate && historyCustomEndDate) {
+        startDate = historyCustomStartDate;
+        endDate = historyCustomEndDate;
+      }
+    } else if (historyPeriodFilter === 'all') {
+      setLoadingPeriod(true);
+      api.loadAdminBookings()
+        .then((res) => {
+          if (res && res.length > 0) setPeriodBookings(res);
+        })
+        .catch(() => {})
+        .finally(() => setLoadingPeriod(false));
+      return;
+    }
+
+    if (startDate && endDate) {
+      setLoadingPeriod(true);
+      const promise = startDate === endDate
+        ? api.getBookings({ date: startDate })
+        : api.getBookings({ startDate, endDate });
+
+      promise
+        .then((fetched) => {
+          if (fetched) {
+            setPeriodBookings((prev) => {
+              const map = new Map<string, Booking>();
+              (prev || bookings || []).forEach((b) => map.set(b.id, b));
+              fetched.forEach((b) => map.set(b.id, b));
+              return Array.from(map.values());
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoadingPeriod(false));
+    }
+  }, [historyPeriodFilter, historyCustomStartDate, historyCustomEndDate, todayStr]);
 
   // Edit Walk-in Record Modal State
   const [editingRecord, setEditingRecord] = useState<Booking | null>(null);
@@ -239,17 +308,26 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   };
 
   // All Walk-in Bookings across the entire dataset (Latest First)
+  const sourceWalkinBookings = useMemo(() => {
+    const idMap = new Map<string, Booking>();
+    (bookings || []).forEach((b) => idMap.set(b.id, b));
+    (periodBookings || []).forEach((b) => idMap.set(b.id, b));
+    api.getCachedBookings().forEach((b) => idMap.set(b.id, b));
+    return Array.from(idMap.values());
+  }, [bookings, periodBookings]);
+
   const allWalkinBookings = useMemo(() => {
-    return (bookings || [])
+    return (sourceWalkinBookings || [])
       .filter(
         (b) =>
           b.isWalkin === true ||
-          b.bookingCode?.startsWith('WLK-') ||
+          (b.id && b.id.toLowerCase().startsWith('wlk-')) ||
+          (b.bookingCode && b.bookingCode.toUpperCase().startsWith('WLK-')) ||
           (b.notes && /walk-?in|ဆိုင်ရောက်/i.test(b.notes)) ||
           (b.customerName && /walk-?in|ဧည့်သည်/i.test(b.customerName))
       )
       .sort(compareWalkinsMostRecentFirst);
-  }, [bookings]);
+  }, [sourceWalkinBookings]);
 
   // Toast Helper
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -398,20 +476,27 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
 
   // Filtered History Records
   const filteredHistoryRecords = useMemo(() => {
+    const formatYMD = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
     const today = new Date();
-    const todayStrFormatted = today.toISOString().split('T')[0];
+    const todayStrFormatted = formatYMD(today);
 
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yesterdayStr = formatYMD(yesterday);
 
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
-    const weekAgoStr = weekAgo.toISOString().split('T')[0];
+    const weekAgoStr = formatYMD(weekAgo);
 
     const monthAgo = new Date();
     monthAgo.setMonth(monthAgo.getMonth() - 1);
-    const monthAgoStr = monthAgo.toISOString().split('T')[0];
+    const monthAgoStr = formatYMD(monthAgo);
 
     return allWalkinBookings.filter((rec) => {
       if (searchQuery.trim()) {

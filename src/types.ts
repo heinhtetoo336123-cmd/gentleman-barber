@@ -26,6 +26,7 @@ export interface Service {
   active: boolean;
   pointsEarned?: number;
   displayOrder?: number; // Custom display order set by admin for client side
+  order?: number; // Explicit numerical order field for Client Service Display
 }
 
 export interface Designer {

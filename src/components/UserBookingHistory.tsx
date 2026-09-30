@@ -121,6 +121,15 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
     }
   }, [userPhone]);
 
+  // On-Demand Client History Loader: automatically fetches historical records for this client phone
+  useEffect(() => {
+    if (activeClientPhone && activeClientPhone.trim().length >= 7) {
+      api.getClientBookingsFromCloud(activeClientPhone).catch((err) => {
+        console.warn('UserBookingHistory on-demand client fetch error:', err);
+      });
+    }
+  }, [activeClientPhone]);
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3500);

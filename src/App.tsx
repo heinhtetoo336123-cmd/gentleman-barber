@@ -122,6 +122,13 @@ export default function App() {
         setRole(decrypted.role as UserRole);
         setHasSelectedPortal(true);
         setActiveTab('admin-dashboard');
+        const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
+        fetchToday.then((bList) => {
+          if (bList && bList.length > 0) {
+            setBookings(bList);
+            setStats(api.getCachedStats());
+          }
+        }).catch(() => {});
       }
     } else {
       const savedBarberSession = localStorage.getItem('baba_barber_session');
@@ -183,6 +190,14 @@ export default function App() {
       setServices(updatedServices);
     });
 
+    const handleServicesReordered = (e: any) => {
+      const fresh = e.detail || api.getCachedServices();
+      if (Array.isArray(fresh) && fresh.length > 0) {
+        setServices([...fresh]);
+      }
+    };
+    window.addEventListener('baba_services_reordered', handleServicesReordered);
+
     const unsubDesigners = api.subscribeToDesigners((updatedDesigners) => {
       setDesigners(updatedDesigners);
     });
@@ -192,13 +207,20 @@ export default function App() {
     });
 
     const unsubBookings = api.subscribeToBookings((updatedBookings) => {
-      setBookings(updatedBookings);
+      setBookings((prev) => {
+        const idMap = new Map<string, Booking>();
+        (prev || []).forEach(b => idMap.set(b.id, b));
+        (updatedBookings || []).forEach(b => idMap.set(b.id, b));
+        api.getCachedBookings().forEach(b => idMap.set(b.id, b));
+        return Array.from(idMap.values());
+      });
       setStats(api.getCachedStats());
     });
 
     return () => {
       window.removeEventListener('click', handleUserInteraction);
       window.removeEventListener('touchstart', handleUserInteraction);
+      window.removeEventListener('baba_services_reordered', handleServicesReordered);
       unsubServices();
       unsubDesigners();
       unsubSettings();
@@ -212,6 +234,15 @@ export default function App() {
       const unsubClients = api.subscribeToClients((updatedClients) => {
         setClients(updatedClients);
       });
+      // Sync today's operational queue for Admin Dashboard
+      const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
+      fetchToday.then((bList) => {
+        if (bList && bList.length > 0) {
+          setBookings(bList);
+          setStats(api.getCachedStats());
+        }
+      }).catch(() => {});
+
       return () => {
         unsubClients();
       };
@@ -280,31 +311,36 @@ export default function App() {
 
     setServices(cServices);
     setDesigners(cDesigners);
-    setBookings(cBookings);
+    if (cBookings && cBookings.length > 0) setBookings(cBookings);
     setClients(cClients);
     setStats(api.getCachedStats());
     if (cSettings) setShopSettings(cSettings);
     if (cNotifs && cNotifs.length > 0) setNotifications(cNotifs);
 
-    // 2. Only perform background network fetch if caches are completely empty (Cold start)
+    // 2. Fetch today's operational bookings for live real-time schedule (Quota-efficient: only today's records)
     try {
+      const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
+      fetchToday.then((bList) => {
+        if (bList && bList.length > 0) {
+          setBookings(bList);
+          setStats(api.getCachedStats());
+        }
+      }).catch(() => {});
+
       if (!cServices || cServices.length === 0) {
         api.getServices().then(sList => { if (sList && sList.length > 0) setServices(sList); }).catch(() => {});
       }
       if (!cDesigners || cDesigners.length === 0) {
         api.getDesigners().then(dList => { if (dList && dList.length > 0) setDesigners(dList); }).catch(() => {});
       }
-      if (!cBookings || cBookings.length === 0) {
-        api.getBookings().then(bList => { if (bList) { setBookings(bList); setStats(api.getCachedStats()); } }).catch(() => {});
-      }
       if (!cSettings) {
         api.getSettings().then(setts => { if (setts) setShopSettings(setts); }).catch(() => {});
       }
-      if ((role === 'admin' || role === 'superadmin') && (!cClients || cClients.length === 0)) {
+      if (role === 'admin' || role === 'superadmin') {
         api.getClients().then(cList => { if (cList && cList.length > 0) setClients(cList); }).catch(() => {});
       }
     } catch (err) {
-      console.error('Background refresh error:', err);
+      console.warn('loadAllData background fetch warning:', err);
     }
   };
 
@@ -326,6 +362,13 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
+    const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
+    fetchToday.then((bList) => {
+      if (bList && bList.length > 0) {
+        setBookings(bList);
+        setStats(api.getCachedStats());
+      }
+    }).catch(() => {});
   };
 
   const handleEnterAsSuperAdmin = () => {
@@ -334,6 +377,13 @@ export default function App() {
     setHasSelectedPortal(true);
     setActiveTab('hub');
     setAdminSubTab('hub');
+    const fetchToday = typeof api?.getTodayBookings === 'function' ? api.getTodayBookings() : (api?.getBookings ? api.getBookings() : Promise.resolve([]));
+    fetchToday.then((bList) => {
+      if (bList && bList.length > 0) {
+        setBookings(bList);
+        setStats(api.getCachedStats());
+      }
+    }).catch(() => {});
   };
 
   const handleEnterAsBarber = (barber: Designer) => {

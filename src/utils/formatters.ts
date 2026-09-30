@@ -230,48 +230,34 @@ export function sortBookingsMostRecentFirst<T extends { createdAt?: string; upda
 }
 
 /**
- * Sorts services for display across the client-side UI:
- * 1. Explicit displayOrder configured by admin (1, 2, 3...)
- * 2. Default fallback: Haircut ('Hair Cut') category services first, followed by Shampoo, Colour, Perming, Dreadlock
- * 3. Stable name sorting as tiebreaker.
+ * Sorts services strictly by Service Menu categories for both Client and Admin:
+ * 1. Hair Cut ('Hair Cut') first
+ * 2. Shampoo ('Shampoo') second
+ * 3. Colour ('Colour') third
+ * 4. Perming ('Perming') fourth
+ * 5. Dreadlock ('Dreadlock') fifth
+ * 6. Other categories
+ * Within the same category, sort by service name ascending.
  */
-export function sortServicesForClient<T extends { category?: string; name?: string; displayOrder?: number; id?: string }>(
+export function sortServicesForClient<T extends { category?: string; name?: string; id?: string }>(
   services: T[]
 ): T[] {
   if (!services || !Array.isArray(services)) return [];
 
-  const categoryPriority: Record<string, number> = {
-    'hair cut': 1,
-    'haircut': 1,
-    'shampoo': 2,
-    'colour': 3,
-    'color': 3,
-    'perming': 4,
-    'perm': 4,
-    'dreadlock': 5,
-    'dreadlocks': 5,
+  const getCategoryPriority = (cat?: string): number => {
+    if (!cat) return 99;
+    const clean = cat.toLowerCase().replace(/[\s_-]+/g, '');
+    if (clean.includes('haircut') || clean.includes('cut') || clean.includes('hair')) return 1;
+    if (clean.includes('shampoo') || clean.includes('wash')) return 2;
+    if (clean.includes('colour') || clean.includes('color') || clean.includes('dye') || clean.includes('highlight')) return 3;
+    if (clean.includes('perm') || clean.includes('straight')) return 4;
+    if (clean.includes('dread') || clean.includes('lock')) return 5;
+    return 10;
   };
 
   return [...services].sort((a, b) => {
-    const hasOrderA = typeof a.displayOrder === 'number' && !isNaN(a.displayOrder) && a.displayOrder > 0;
-    const hasOrderB = typeof b.displayOrder === 'number' && !isNaN(b.displayOrder) && b.displayOrder > 0;
-
-    if (hasOrderA && hasOrderB) {
-      if (a.displayOrder !== b.displayOrder) {
-        return (a.displayOrder ?? 0) - (b.displayOrder ?? 0);
-      }
-    } else if (hasOrderA) {
-      return -1;
-    } else if (hasOrderB) {
-      return 1;
-    }
-
-    // Default category fallback: Hair Cut category always first!
-    const catA = (a.category || '').toLowerCase().trim();
-    const catB = (b.category || '').toLowerCase().trim();
-
-    const prioA = categoryPriority[catA] ?? 20;
-    const prioB = categoryPriority[catB] ?? 20;
+    const prioA = getCategoryPriority(a.category);
+    const prioB = getCategoryPriority(b.category);
 
     if (prioA !== prioB) {
       return prioA - prioB;

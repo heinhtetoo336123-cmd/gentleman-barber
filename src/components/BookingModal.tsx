@@ -3,7 +3,7 @@ import { Service, Designer, Booking, PaymentSettings } from '../types';
 import { Language, translations } from '../data/i18n';
 import { api } from '../api/client';
 import { playSuccessChime, playNotificationChime } from '../utils/audio';
-import { formatPrice } from '../utils/formatters';
+import { formatPrice, sortServicesForClient } from '../utils/formatters';
 import { uploadImageToStorage } from '../utils/imageCompressor';
 import { saveMyBookingId, phonesMatch } from '../utils/notifications';
 import {
@@ -87,7 +87,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   const [services, setServices] = useState<Service[]>(() => {
     return availableServices && availableServices.length > 0
-      ? availableServices.filter((s) => s.active !== false)
+      ? sortServicesForClient(availableServices.filter((s) => s.active !== false))
       : [];
   });
   const [designers, setDesigners] = useState<Designer[]>(() => {
@@ -263,7 +263,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Sync services & designers dynamically WITHOUT resetting the user's current step
   useEffect(() => {
     if (availableServices && availableServices.length > 0) {
-      setServices(availableServices.filter((s) => s.active !== false));
+      setServices(sortServicesForClient(availableServices.filter((s) => s.active !== false)));
     }
   }, [availableServices]);
 

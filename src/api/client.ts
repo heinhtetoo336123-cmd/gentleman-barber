@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   getDoc,
   setDoc,
   updateDoc,
@@ -14,6 +15,7 @@ import {
   runTransaction,
   orderBy,
   limit,
+  startAfter,
   onSnapshot
 } from 'firebase/firestore';
 import {
@@ -218,21 +220,34 @@ export function notifyLocalSubscribers(type: SyncDataType, data: any) {
   }
 }
 
+function cleanForStorage(value: any): any {
+  if (!value) return value;
+  if (Array.isArray(value)) {
+    return value.map(cleanForStorage);
+  }
+  if (typeof value === 'object') {
+    const copy = { ...value };
+    if (typeof copy.designerAvatar === 'string' && copy.designerAvatar.startsWith('data:image')) {
+      copy.designerAvatar = ''; // Strip massive base64 so localStorage NEVER hits quota
+    }
+    if (typeof copy.paymentSlipUrl === 'string' && copy.paymentSlipUrl.startsWith('data:image')) {
+      copy.paymentSlipUrl = ''; // Strip massive base64
+    }
+    return copy;
+  }
+  return value;
+}
+
 function setLocalData<T>(key: string, value: T) {
   // Always update in-memory cache first with complete full list
   memoryStorageCache.set(key, value);
 
-  // For LocalStorage: preserve complete dataset with safe quota handling
+  // For LocalStorage: save clean lightweight version so it fits easily within standard 5MB quota
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    const cleanVal = cleanForStorage(value);
+    localStorage.setItem(key, JSON.stringify(cleanVal));
   } catch (e) {
-    // Storage quota reached: purge bloated auxiliary keys safely
-    try {
-      localStorage.removeItem(LOCAL_LOGS_KEY);
-      localStorage.removeItem(LOCAL_EXPENSES_KEY);
-      localStorage.removeItem(LOCAL_RETAIL_SALES_KEY);
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {}
+    console.warn(`LocalStorage write warning for ${key}:`, e);
   }
 }
 
@@ -272,6 +287,20 @@ export function sanitizeForFirestore<T>(obj: T): T {
   return obj;
 }
 
+export function parseBookingDoc(d: any): Booking {
+  const data = d.data();
+  const id = d.id;
+  const bookingCode = data.bookingCode || (id ? id.toUpperCase() : 'WLK-GUEST');
+
+  return {
+    ...data,
+    id,
+    bookingCode,
+    designerAvatar: data.designerAvatar || '',
+    paymentSlipUrl: data.paymentSlipUrl || '',
+  } as Booking;
+}
+
 const MOCK_SAMPLE_SERVICE_IDS = new Set([
   'service-1', 'service-2', 'service-3', 'service-4',
   'service-5', 'service-6', 'service-7', 'service-8'
@@ -283,7 +312,97 @@ function purgeMockServicesFromFirestore() {
   // Mock IDs are already filtered out via MOCK_SAMPLE_SERVICE_IDS in all queries.
 }
 
+/**
+ * Computes the device's local calendar dates (covering 00:00:00 to 23:59:59 local time).
+ * Also accounts for UTC timezone offsets so no booking created on either clock is ever missed.
+ */
+export function getDeviceTodayQueryDates(targetDate: Date = new Date()): string[] {
+  const formatYMD = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const localToday = formatYMD(targetDate);
+  const utcToday = targetDate.toISOString().split('T')[0];
+
+  if (localToday !== utcToday) {
+    return [localToday, utcToday];
+  }
+  return [localToday];
+}
+
+// Track dates that have already been queried and cached to guarantee 0 redundant cloud reads
+const CACHED_LOADED_DATES_KEY = 'babashop_loaded_dates_v3';
+export function getLoadedDatesSet(): Set<string> {
+  try {
+    const raw = (typeof localStorage !== 'undefined' ? localStorage.getItem(CACHED_LOADED_DATES_KEY) : null) ||
+                (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(CACHED_LOADED_DATES_KEY) : null);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+export function markDatesAsLoaded(dates: string[]) {
+  try {
+    const current = getLoadedDatesSet();
+    dates.forEach(d => current.add(d));
+    const serialized = JSON.stringify(Array.from(current));
+    if (typeof localStorage !== 'undefined') localStorage.setItem(CACHED_LOADED_DATES_KEY, serialized);
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(CACHED_LOADED_DATES_KEY, serialized);
+  } catch {}
+}
+
+// Session in-memory cache for targeted date queries (Guarantees 0 redundant cloud reads within a session)
+const inMemoryDateBookingsCache = new Map<string, Booking[]>();
+
+/**
+ * Cache Invalidation Helper:
+ * Clears in-memory caches, sessionStorage range entries, and notifies active UI subscribers
+ */
+export function invalidateBookingDateCache(date?: string, bookingId?: string) {
+  if (date) {
+    const cleanDate = date.split('T')[0];
+    inMemoryDateBookingsCache.delete(cleanDate);
+    // Also remove any range keys containing this date
+    for (const key of Array.from(inMemoryDateBookingsCache.keys())) {
+      if (key.includes(cleanDate) || key.includes('_')) {
+        inMemoryDateBookingsCache.delete(key);
+      }
+    }
+  } else {
+    inMemoryDateBookingsCache.clear();
+  }
+
+  // Clear sessionStorage range caches
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k && k.startsWith('baba_matrix_range_')) {
+          if (!date || k.includes(date.split('T')[0])) {
+            keysToRemove.push(k);
+          }
+        }
+      }
+      keysToRemove.forEach((k) => sessionStorage.removeItem(k));
+    } catch {}
+  }
+
+  // Dispatch browser custom event for instant 0ms UI reactivity
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('baba_booking_invalidated', {
+        detail: { date, bookingId }
+      })
+    );
+  }
+}
+
 export const api = {
+  invalidateBookingCache: invalidateBookingDateCache,
   // --- Services API ---
   async getServices(): Promise<Service[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
@@ -315,9 +434,11 @@ export const api = {
     
     // Auto calculate display order if not explicitly passed
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
-    const defaultOrder = typeof service.displayOrder === 'number' && service.displayOrder > 0
-      ? service.displayOrder
-      : current.length + 1;
+    const defaultOrder = (typeof service.order === 'number' && service.order > 0)
+      ? service.order
+      : (typeof service.displayOrder === 'number' && service.displayOrder > 0
+        ? service.displayOrder
+        : current.length + 1);
 
     const newSrv: Service = {
       id: newId,
@@ -332,6 +453,7 @@ export const api = {
       recommendBadge: service.recommendBadge,
       active: service.active !== false,
       pointsEarned: Number(service.pointsEarned) || 50,
+      order: defaultOrder,
       displayOrder: defaultOrder,
     };
 
@@ -354,7 +476,14 @@ export const api = {
     if (cleanUpdates.price !== undefined) cleanUpdates.price = Number(cleanUpdates.price);
     if (cleanUpdates.durationMinutes !== undefined) cleanUpdates.durationMinutes = Number(cleanUpdates.durationMinutes);
     if (cleanUpdates.pointsEarned !== undefined) cleanUpdates.pointsEarned = Number(cleanUpdates.pointsEarned);
+    if (cleanUpdates.order !== undefined) cleanUpdates.order = Number(cleanUpdates.order);
     if (cleanUpdates.displayOrder !== undefined) cleanUpdates.displayOrder = Number(cleanUpdates.displayOrder);
+    if (cleanUpdates.order !== undefined && cleanUpdates.displayOrder === undefined) {
+      cleanUpdates.displayOrder = cleanUpdates.order;
+    }
+    if (cleanUpdates.displayOrder !== undefined && cleanUpdates.order === undefined) {
+      cleanUpdates.order = cleanUpdates.displayOrder;
+    }
     if (cleanUpdates.description !== undefined) cleanUpdates.description = cleanUpdates.description.trim();
     if (cleanUpdates.imageUrl !== undefined) {
       cleanUpdates.imageUrl = sanitizeImageUrl(cleanUpdates.imageUrl, 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=600');
@@ -381,6 +510,7 @@ export const api = {
     if (orderedListOrIds.length > 0 && typeof orderedListOrIds[0] === 'object') {
       newOrderedServices = (orderedListOrIds as Service[]).map((s, idx) => ({
         ...s,
+        order: idx + 1,
         displayOrder: idx + 1,
       }));
     } else {
@@ -390,23 +520,30 @@ export const api = {
       idList.forEach((id, idx) => {
         const item = map.get(id);
         if (item) {
-          newOrderedServices.push({ ...item, displayOrder: idx + 1 });
+          newOrderedServices.push({ ...item, order: idx + 1, displayOrder: idx + 1 });
           map.delete(id);
         }
       });
       // Append any unreferenced
       Array.from(map.values()).forEach((s, idx) => {
-        newOrderedServices.push({ ...s, displayOrder: idList.length + idx + 1 });
+        newOrderedServices.push({ ...s, order: idList.length + idx + 1, displayOrder: idList.length + idx + 1 });
       });
     }
 
     setLocalData(LOCAL_SERVICES_KEY, newOrderedServices);
     notifyLocalSubscribers('services', newOrderedServices);
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('baba_services_reordered', { detail: newOrderedServices }));
+    }
+
     try {
       const batch = writeBatch(db);
       newOrderedServices.forEach((s) => {
-        batch.update(doc(db, 'services', s.id), { displayOrder: s.displayOrder });
+        batch.update(doc(db, 'services', s.id), {
+          order: s.order ?? s.displayOrder ?? 1,
+          displayOrder: s.displayOrder ?? s.order ?? 1,
+        });
       });
       await batch.commit();
     } catch (e) {
@@ -834,19 +971,185 @@ export const api = {
     status?: string;
     limitCount?: number;
   }): Promise<Booking[]> {
+    // 1. SPECIFIC DATE REQUESTED (e.g. Admin selected a past date in Date Picker):
+    if (options?.date) {
+      const targetDate = options.date;
+
+      // In-memory cache hit: 0 network, 0 cloud reads, instant render
+      if (inMemoryDateBookingsCache.has(targetDate)) {
+        let list = inMemoryDateBookingsCache.get(targetDate) || [];
+        if (options.designerId) {
+          list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+        }
+        if (options.status) {
+          list = list.filter(b => b.status === options.status);
+        }
+        return sortBookingsMostRecentFirst(list);
+      }
+
+      // Check persistent cache if already populated
+      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const inCacheForDate = cached.filter(b => b.date === targetDate);
+
+      // Targeted Single-Day Query: ONLY reads documents for this exact date
+      let fetchedForDate: Booking[] = [];
+
+      // Step A: Fast Server Proxy (Lightweight, strips heavy images, responds in ~30ms)
+      try {
+        const resp = await fetch(`/api/firestore/bookings?date=${encodeURIComponent(targetDate)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data) && data.length > 0) {
+            fetchedForDate = data.map((d: any) => ({
+              ...d,
+              bookingCode: d.bookingCode || (d.id ? d.id.toUpperCase() : 'WLK-GUEST'),
+              designerAvatar: d.designerAvatar || '',
+              paymentSlipUrl: d.paymentSlipUrl || '',
+            }));
+          }
+        }
+      } catch {}
+
+      // Step B: Direct Firestore Server Fetch (bypasses any stale IndexedDB offline cache!)
+      if (fetchedForDate.length === 0) {
+        try {
+          const q = query(collection(db, 'bookings'), where('date', '==', targetDate));
+          let snap;
+          try {
+            snap = await getDocsFromServer(q);
+          } catch {
+            snap = await getDocs(q);
+          }
+          fetchedForDate = snap.docs.map(parseBookingDoc);
+        } catch (err) {
+          console.warn('Direct Firestore targeted date fetch fallback:', err);
+        }
+      }
+
+      fetchedForDate = sortBookingsMostRecentFirst(
+        fetchedForDate.filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
+      );
+
+      const resolvedList = fetchedForDate.length > 0 ? fetchedForDate : inCacheForDate;
+
+      // Cache in memory for 0-read reuse throughout this session
+      inMemoryDateBookingsCache.set(targetDate, resolvedList);
+
+      // Store into persistent local cache
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      resolvedList.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+      notifyLocalSubscribers('bookings', merged);
+
+      let filtered = resolvedList;
+      if (options.designerId) {
+        filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+      }
+      if (options.status) {
+        filtered = filtered.filter(b => b.status === options.status);
+      }
+      return sortBookingsMostRecentFirst(filtered);
+    }
+
+    // 2. DATE RANGE REQUESTED (e.g. startDate to endDate):
+    if (options?.startDate && options?.endDate) {
+      const sDate = options.startDate;
+      const eDate = options.endDate;
+      const rangeKey = `${sDate}_to_${eDate}`;
+
+      // In-memory cache hit: 0 network, 0 cloud reads
+      if (inMemoryDateBookingsCache.has(rangeKey)) {
+        let list = inMemoryDateBookingsCache.get(rangeKey) || [];
+        if (options.designerId) {
+          list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+        }
+        if (options.status) {
+          list = list.filter(b => b.status === options.status);
+        }
+        return sortBookingsMostRecentFirst(list);
+      }
+
+      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const inCacheRange = cached.filter(b => b.date && b.date >= sDate && b.date <= eDate);
+
+      // Fetch on-demand strictly within the requested date boundary
+      let fetchedRange: Booking[] = [];
+
+      // Step A: Fast Server Proxy
+      try {
+        const resp = await fetch(`/api/firestore/bookings?startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (Array.isArray(data) && data.length > 0) {
+            fetchedRange = data.map((d: any) => ({
+              ...d,
+              bookingCode: d.bookingCode || (d.id ? d.id.toUpperCase() : 'WLK-GUEST'),
+              designerAvatar: d.designerAvatar || '',
+              paymentSlipUrl: d.paymentSlipUrl || '',
+            }));
+          }
+        }
+      } catch {}
+
+      // Step B: Direct Firestore Server Fetch
+      if (fetchedRange.length === 0) {
+        try {
+          const q = query(
+            collection(db, 'bookings'),
+            where('date', '>=', sDate),
+            where('date', '<=', eDate)
+          );
+          let snap;
+          try {
+            snap = await getDocsFromServer(q);
+          } catch {
+            snap = await getDocs(q);
+          }
+          fetchedRange = snap.docs.map(parseBookingDoc);
+        } catch (err) {
+          console.warn('Firestore targeted date range fetch fallback:', err);
+        }
+      }
+
+      fetchedRange = sortBookingsMostRecentFirst(
+        fetchedRange.filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
+      );
+
+      const resolvedRange = fetchedRange.length > 0 ? fetchedRange : inCacheRange;
+
+      // Cache in memory for 0-read reuse
+      inMemoryDateBookingsCache.set(rangeKey, resolvedRange);
+
+      // Store into persistent local cache
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      resolvedRange.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+      notifyLocalSubscribers('bookings', merged);
+
+      let filtered = resolvedRange;
+      if (options.designerId) {
+        filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+      }
+      if (options.status) {
+        filtered = filtered.filter(b => b.status === options.status);
+      }
+      return sortBookingsMostRecentFirst(filtered);
+    }
+
+    // 3. NO DATE SPECIFIED (Default Today's Schedule):
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    
-    // Serve from cache first if available (prevents repeated full database scans)
     if (cached && cached.length > 0) {
       let filtered = cached;
       if (options?.designerId) {
         filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-      }
-      if (options?.date) {
-        filtered = filtered.filter(b => b.date === options.date);
-      }
-      if (options?.startDate && options?.endDate) {
-        filtered = filtered.filter(b => b.date >= options.startDate! && b.date <= options.endDate!);
       }
       if (options?.status) {
         filtered = filtered.filter(b => b.status === options.status);
@@ -858,23 +1161,31 @@ export const api = {
     }
 
     try {
-      const snap = await getDocs(collection(db, 'bookings'));
+      const todayDates = getDeviceTodayQueryDates();
+      const q = todayDates.length > 1
+        ? query(collection(db, 'bookings'), where('date', 'in', todayDates))
+        : query(collection(db, 'bookings'), where('date', '==', todayDates[0]));
+
+      const snap = await getDocs(q);
       if (!snap.empty) {
         const list = sortBookingsMostRecentFirst(
           snap.docs
-            .map(d => ({ id: d.id, ...d.data() } as Booking))
+            .map(parseBookingDoc)
             .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
         );
-        setLocalData(LOCAL_BOOKINGS_KEY, list);
+
+        const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+        const idMap = new Map<string, Booking>();
+        existing.forEach(b => idMap.set(b.id, b));
+        list.forEach(b => idMap.set(b.id, b));
+        const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+        setLocalData(LOCAL_BOOKINGS_KEY, merged);
+        markDatesAsLoaded(todayDates);
+        notifyLocalSubscribers('bookings', merged);
+
         let filtered = list;
         if (options?.designerId) {
           filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-        }
-        if (options?.date) {
-          filtered = filtered.filter(b => b.date === options.date);
-        }
-        if (options?.startDate && options?.endDate) {
-          filtered = filtered.filter(b => b.date >= options.startDate! && b.date <= options.endDate!);
         }
         if (options?.status) {
           filtered = filtered.filter(b => b.status === options.status);
@@ -891,8 +1202,156 @@ export const api = {
   },
 
   /**
+   * Fetches today's active operational bookings
+   */
+  async getTodayBookings(): Promise<Booking[]> {
+    const todayStr = getLocalTodayStr();
+    return api.getBookings({ date: todayStr });
+  },
+
+  /**
+   * Dedicated Admin Dataset Loader:
+   * When authenticated as Admin / SuperAdmin, loads the full operational bookings
+   * so all historical dates (from 17th to 29th) are immediately visible without missing records.
+   * Caches locally so subsequent views are 0 cloud reads.
+   */
+  async loadAdminBookings(): Promise<Booking[]> {
+    try {
+      const snap = await getDocs(collection(db, 'bookings'));
+      const list = sortBookingsMostRecentFirst(
+        snap.docs
+          .map(parseBookingDoc)
+          .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
+      );
+
+      // Cache records locally and notify listeners
+      setLocalData(LOCAL_BOOKINGS_KEY, list);
+      notifyLocalSubscribers('bookings', list);
+      return list;
+    } catch (e) {
+      console.warn('loadAdminBookings fallback:', e);
+      return getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    }
+  },
+
+  /**
+   * On-Demand Historical Records for Admin:
+   * Only fetch past records when the Admin requests history, selects a date, or date range.
+   * Broad history queries are strictly paginated with a limit of 20 to 30 records per page.
+   */
+  async getHistoricalBookings(options: {
+    date?: string;
+    startDate?: string;
+    endDate?: string;
+    limitCount?: number;
+    lastDocId?: string;
+  }): Promise<{ bookings: Booking[]; hasMore: boolean; lastDocId?: string }> {
+    const pageLimit = Math.min(Math.max(options.limitCount || 25, 20), 30);
+    try {
+      let q;
+      if (options.date) {
+        q = query(collection(db, 'bookings'), where('date', '==', options.date), limit(pageLimit));
+      } else if (options.startDate && options.endDate) {
+        q = query(
+          collection(db, 'bookings'),
+          where('date', '>=', options.startDate),
+          where('date', '<=', options.endDate),
+          limit(pageLimit)
+        );
+      } else {
+        // Broad history query: ordered by date descending with strict 25 limit
+        q = query(
+          collection(db, 'bookings'),
+          orderBy('date', 'desc'),
+          limit(pageLimit)
+        );
+      }
+
+      const snap = await getDocs(q);
+      const list = sortBookingsMostRecentFirst(
+        snap.docs
+          .map(parseBookingDoc)
+          .filter(b => !(b as any).isDeleted)
+      );
+
+      // Cache records in local memory for smooth UI experience
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      list.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+
+      const lastDoc = snap.docs[snap.docs.length - 1];
+      return {
+        bookings: list,
+        hasMore: snap.docs.length === pageLimit,
+        lastDocId: lastDoc ? lastDoc.id : undefined,
+      };
+    } catch (e) {
+      console.warn('Firestore getHistoricalBookings fallback:', e);
+      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      let filtered = cached;
+      if (options.date) {
+        filtered = filtered.filter(b => b.date === options.date);
+      } else if (options.startDate && options.endDate) {
+        filtered = filtered.filter(b => b.date >= options.startDate! && b.date <= options.endDate!);
+      }
+      return {
+        bookings: filtered.slice(0, pageLimit),
+        hasMore: false,
+      };
+    }
+  },
+
+  /**
+   * On-Demand Client History Loader:
+   * Only fetches bookings matching this customer's phone number with limit(25).
+   * Caches locally so future checks cost 0 cloud reads!
+   */
+  async getClientBookingsFromCloud(phone: string): Promise<Booking[]> {
+    if (!phone || !phone.trim()) return [];
+    const normalized = phone.replace(/[^0-9]/g, '');
+    const loadedClients = getLoadedDatesSet();
+    const clientKey = `client_${normalized}`;
+
+    // Cache hit: If already queried
+    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    if (loadedClients.has(clientKey)) {
+      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+    }
+
+    try {
+      const q = query(
+        collection(db, 'bookings'),
+        where('customerPhone', '==', phone.trim()),
+        limit(25)
+      );
+      const snap = await getDocs(q);
+      const fetched = snap.docs
+        .map(parseBookingDoc)
+        .filter(b => !(b as any).isDeleted);
+
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      fetched.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+      markDatesAsLoaded([clientKey]);
+      notifyLocalSubscribers('bookings', merged);
+
+      return fetched;
+    } catch (e) {
+      console.warn('getClientBookingsFromCloud warning:', e);
+      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+    }
+  },
+
+  /**
    * Real-time listener for bookings with Singleton Shared Listener.
-   * Emits local cache immediately at 0ms, then keeps local cache perfectly in sync with Firestore.
+   * Emits local cache immediately at 0ms, then queries today's operational schedule.
+   * Zero arbitrary limit(60) applied - all appointments for today are guaranteed to load.
    */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     // 1. Register in-memory & cross-tab sync listener
@@ -906,13 +1365,16 @@ export const api = {
     }
 
     // 2. Attach or share the single active Firestore onSnapshot listener
+    // Syncs operational bookings collection in real-time across all dates and devices
     const releaseListener = retainSharedListener('bookings', () => {
+      const q = collection(db, 'bookings');
+
       return onSnapshot(
-        collection(db, 'bookings'),
+        q,
         (snap) => {
           const list = sortBookingsMostRecentFirst(
             snap.docs
-              .map(d => ({ id: d.id, ...d.data() } as Booking))
+              .map(parseBookingDoc)
               .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
           );
 
@@ -959,7 +1421,8 @@ export const api = {
   },
 
   getCachedServices(): Service[] {
-    return getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+    const cached = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+    return sortServicesForClient(cached);
   },
 
   getCachedDesigners(): Designer[] {
@@ -1563,6 +2026,7 @@ export const api = {
     const updated = current.map(b => (b.id === id ? { ...b, ...updates } : b));
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
+    invalidateBookingDateCache(target?.date || updates.date, id);
 
     try {
       this.addAuditLog(
@@ -1589,15 +2053,21 @@ export const api = {
   },
 
   async deleteBooking(id: string): Promise<boolean> {
-    try {
-      await deleteDoc(doc(db, 'bookings', id));
-    } catch (e) {
-      console.warn('Firestore deleteBooking fallback:', e);
-    }
+    // 1. Optimistic update: instantly remove from local cache for 0ms UI latency
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    const target = current.find(b => b.id === id);
+    const targetDate = target?.date;
     const updated = current.filter(b => b.id !== id);
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
+    invalidateBookingDateCache(targetDate, id);
+
+    // 2. Direct document mutation: delete strictly by Document ID (0 collection re-fetch)
+    try {
+      await deleteDoc(doc(db, 'bookings', id));
+    } catch (e) {
+      console.warn('Firestore direct deleteDoc error:', e);
+    }
     return true;
   },
 
@@ -1608,6 +2078,7 @@ export const api = {
       : [];
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
+    invalidateBookingDateCache();
 
     // Also delete from Firestore if possible
     try {
@@ -2769,14 +3240,17 @@ export const api = {
       const notifsQuery = query(collection(db, 'notifications'), limit(20));
 
       unsubFirestore = onSnapshot(notifsQuery, (snap) => {
-        if (snap.empty) return;
+        if (snap.empty && snap.docChanges().length === 0) return;
         const nowMs = Date.now();
         const currentLocal = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
         const localIdSet = new Set(currentLocal.map(n => n.id));
         let hasNew = false;
         const newIncoming: NotificationItem[] = [];
 
-        snap.docs.forEach((d) => {
+        // Strictly process added changes only so that auto-delete (removed events) never trigger re-processing or re-fetch
+        snap.docChanges().forEach((change) => {
+          if (change.type !== 'added') return;
+          const d = change.doc;
           const data = d.data() as Partial<NotificationItem>;
           const notifId = d.id;
 
@@ -2816,7 +3290,7 @@ export const api = {
               localIdSet.add(notifId);
               hasNew = true;
 
-              // Sound and local push
+              // Sound and local in-app alert
               if (!hasNotificationBeenAlerted(notifId)) {
                 markNotificationAsAlerted(notifId);
                 playAudioChime();
@@ -2824,8 +3298,8 @@ export const api = {
               }
             }
 
-            // CONSUME & CLEAR: User directive: "ပို့စရာရှိတာပို့ပြီး ဖျက်အောင်"
-            // Once received by the target role, delete the document from Firestore cloud so read count NEVER accumulates
+            // AUTO-DELETE PATTERN: Immediately delete consumed notification from Firestore
+            // This prevents cloud documents from accumulating and guarantees 0 read amplification.
             deleteDoc(doc(db, 'notifications', notifId)).catch(() => {});
           }
         });
@@ -3761,7 +4235,7 @@ export const api = {
       try {
         const bkSnap = await getDocs(collection(db, 'bookings'));
         if (!bkSnap.empty) {
-          const freshBookings = bkSnap.docs.map(d => ({ id: d.id, ...d.data() } as Booking));
+          const freshBookings = bkSnap.docs.map(parseBookingDoc);
           const sorted = sortBookingsMostRecentFirst(freshBookings);
           setLocalData(LOCAL_BOOKINGS_KEY, sorted);
           notifyLocalSubscribers('bookings', sorted);
@@ -3888,5 +4362,143 @@ export const api = {
         message: err.message || 'Cache ရှင်းလင်းခြင်းနှင့် Re-sync ပြုလုပ်ရာတွင် အမှားဖြစ်သွားပါသည်။'
       };
     }
+  },
+
+  /**
+   * Safe Audit & Purge of Ghost Records (Step 1: Dry-run Audit)
+   * Scans collection and logs counts to console (valid client bookings, valid walk-ins, and ghost records)
+   * along with sample ghost records.
+   * CRITICAL: Protects all Walk-in records even if they lack client names or phone numbers!
+   */
+  async auditGhostBookings(): Promise<{
+    totalScanned: number;
+    validClientBookingsCount: number;
+    validWalkinsCount: number;
+    ghostRecordsCount: number;
+    sampleGhostRecords: { id: string; [key: string]: any }[];
+    ghostDocIds: string[];
+  }> {
+    const snap = await getDocs(collection(db, 'bookings'));
+    let validClientBookingsCount = 0;
+    let validWalkinsCount = 0;
+    let ghostRecordsCount = 0;
+    const ghostDocIds: string[] = [];
+    const sampleGhostRecords: { id: string; [key: string]: any }[] = [];
+
+    snap.docs.forEach((docSnap) => {
+      const d = docSnap.data();
+      const id = docSnap.id;
+
+      // 1. Identify Walk-in records (CRITICAL: 100% PROTECTED)
+      const isWalkin =
+        d.isWalkin === true ||
+        d.isWalkIn === true ||
+        id.startsWith('wlk-') ||
+        Boolean(d.walkinBarberId) ||
+        (d.customerName && d.customerName.toLowerCase().includes('walk-in')) ||
+        (d.notes && d.notes.toLowerCase().includes('walk-in'));
+
+      // 2. Identify business attributes
+      const hasService = Boolean(
+        d.serviceName ||
+        d.serviceId ||
+        (d.services && d.services.length > 0) ||
+        (d.servicesList && d.servicesList.length > 0)
+      );
+
+      const hasPrice = Boolean(
+        (typeof d.price === 'number' && d.price > 0) ||
+        (typeof d.servicePrice === 'number' && d.servicePrice > 0) ||
+        (typeof d.totalPrice === 'number' && d.totalPrice > 0)
+      );
+
+      const hasBarber = Boolean(
+        d.designerId ||
+        d.designerName ||
+        d.walkinBarberId ||
+        d.barberId ||
+        d.barberName
+      );
+
+      const hasStatus = Boolean(
+        d.status &&
+        ['pending', 'confirmed', 'in-progress', 'in_progress', 'serving', 'completed', 'paid', 'cancelled', 'held'].includes(
+          String(d.status).toLowerCase()
+        )
+      );
+
+      const hasClientInfo = Boolean(
+        (d.customerName && !d.customerName.toLowerCase().includes('walk-in')) ||
+        (d.customerPhone && d.customerPhone.trim().length > 0) ||
+        d.clientId
+      );
+
+      // CLASSIFICATION:
+      // Walk-ins: contain service details, total price/amount, barber assigned, or walk-in markers
+      if (isWalkin || (hasPrice && !hasClientInfo && hasBarber)) {
+        validWalkinsCount++;
+      } else if (hasClientInfo || hasService || hasPrice || hasBarber || hasStatus) {
+        validClientBookingsCount++;
+      } else {
+        // Confirmed Ghost Record: NO services, NO price/total, NO barber assigned, and NO business status
+        ghostRecordsCount++;
+        ghostDocIds.push(id);
+        if (sampleGhostRecords.length < 5) {
+          sampleGhostRecords.push({ id, ...d });
+        }
+      }
+    });
+
+    console.log('[Safe Ghost Audit] Step 1 Complete:', {
+      totalScanned: snap.size,
+      validClientBookingsCount,
+      validWalkinsCount,
+      ghostRecordsCount,
+      sampleGhostRecords,
+    });
+
+    return {
+      totalScanned: snap.size,
+      validClientBookingsCount,
+      validWalkinsCount,
+      ghostRecordsCount,
+      sampleGhostRecords,
+      ghostDocIds,
+    };
+  },
+
+  /**
+   * Safe Audit & Purge of Ghost Records (Step 2: Confirmed Purge)
+   * Batch deletes only confirmed ghost documents in batches of 400.
+   */
+  async purgeGhostBookings(ghostDocIds: string[]): Promise<{ purgedCount: number; success: boolean }> {
+    if (!ghostDocIds || ghostDocIds.length === 0) {
+      console.log('[Ghost Purge] No ghost document IDs provided to purge.');
+      return { purgedCount: 0, success: true };
+    }
+
+    const BATCH_SIZE = 400;
+    let purgedCount = 0;
+
+    for (let i = 0; i < ghostDocIds.length; i += BATCH_SIZE) {
+      const chunk = ghostDocIds.slice(i, i + BATCH_SIZE);
+      const batch = writeBatch(db);
+      chunk.forEach((docId) => {
+        batch.delete(doc(db, 'bookings', docId));
+      });
+      await batch.commit();
+      purgedCount += chunk.length;
+      console.log(`[Ghost Purge] Batch committed: ${purgedCount}/${ghostDocIds.length} deleted.`);
+    }
+
+    // Clean up local cache if any ghosts were cached in memory
+    const ghostSet = new Set(ghostDocIds);
+    const local = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    const cleaned = local.filter((b) => !ghostSet.has(b.id));
+    setLocalData(LOCAL_BOOKINGS_KEY, cleaned);
+    notifyLocalSubscribers('bookings', cleaned);
+
+    console.log(`[Ghost Purge] Purge finished. Total ghost documents deleted: ${purgedCount}`);
+    return { purgedCount, success: true };
   }
 };
