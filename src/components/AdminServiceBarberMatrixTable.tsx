@@ -4,7 +4,7 @@ import { formatPrice } from '../utils/formatters';
 import { getLocalTodayStr } from '../utils/timeSlots';
 import { api } from '../api/client';
 import { db } from '../lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, limit } from 'firebase/firestore';
 import {
   Calendar,
   Download,
@@ -70,6 +70,40 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       setTableBookings(bookings.filter((b) => b.date === todayStr));
     }
   }, [bookings, startDate, endDate, todayStr]);
+
+  // Single calendar day view: bind directly to days/{startDate} Daily Ledger
+  useEffect(() => {
+    if (startDate === endDate) {
+      api.getDayLedger(startDate).then((ledger) => {
+        if (ledger) {
+          if (Array.isArray(ledger.bookings) && ledger.bookings.length > 0) {
+            setTableBookings(ledger.bookings);
+          }
+          if (Array.isArray(ledger.expenses) && ledger.expenses.length > 0) {
+            setAllExpenses(ledger.expenses);
+          }
+          if (Array.isArray(ledger.retailSales) && ledger.retailSales.length > 0) {
+            setAllRetailSales(ledger.retailSales);
+          }
+        }
+      }).catch(() => {});
+
+      const unsub = api.subscribeToDayLedger(startDate, (ledger) => {
+        if (ledger) {
+          if (Array.isArray(ledger.bookings)) {
+            setTableBookings(ledger.bookings);
+          }
+          if (Array.isArray(ledger.expenses)) {
+            setAllExpenses(ledger.expenses);
+          }
+          if (Array.isArray(ledger.retailSales)) {
+            setAllRetailSales(ledger.retailSales);
+          }
+        }
+      });
+      return () => unsub();
+    }
+  }, [startDate, endDate]);
 
   // Real-time synchronization from live subscription (0 cloud reads):
   // Inserts any newly added walk-in/booking or removes deleted ones from tableBookings locally in 0ms!
@@ -168,24 +202,35 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       return;
     }
 
-    // 4. Fallback to Firestore only if explicitly user-clicked and cache is empty
+    // 4. Fallback to DayLedger or Firestore only if explicitly user-clicked and cache is empty
     setIsMatrixLoading(true);
     try {
-      const q = query(
-        collection(db, 'bookings'),
-        where('date', '>=', start),
-        where('date', '<=', end)
-      );
-      const snap = await getDocs(q);
-      const fetched = snap.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      matrixDateBookingsCache.set(cacheKey, fetched);
-      setTableBookings(fetched);
-      try {
-        sessionStorage.setItem(`baba_matrix_range_${cacheKey}`, JSON.stringify(fetched));
-      } catch {}
+      if (start === end) {
+        const ledger = await api.getDayLedger(start);
+        const fetched = ledger.bookings || [];
+        matrixDateBookingsCache.set(cacheKey, fetched);
+        setTableBookings(fetched);
+        try {
+          sessionStorage.setItem(`baba_matrix_range_${cacheKey}`, JSON.stringify(fetched));
+        } catch {}
+      } else {
+        const q = query(
+          collection(db, 'bookings'),
+          where('date', '>=', start),
+          where('date', '<=', end),
+          limit(20)
+        );
+        const snap = await getDocs(q);
+        const fetched = snap.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        matrixDateBookingsCache.set(cacheKey, fetched);
+        setTableBookings(fetched);
+        try {
+          sessionStorage.setItem(`baba_matrix_range_${cacheKey}`, JSON.stringify(fetched));
+        } catch {}
+      }
     } catch (err) {
       console.warn('Matrix table fetch error:', err);
       setTableBookings(inRangeCached);
@@ -506,14 +551,15 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
   // Comprehensive Drawer Financial Settlement (Strictly completed services count toward drawer revenue)
   const drawerFinancials = useMemo(() => {
-    // 1. Services Revenue (Cash + Digital) - ONLY COMPLETED BOOKINGS
+    // 1. Services Revenue (Cash + Digital) - Completed Bookings & Walk-ins
     let servicesCash = 0;
     let servicesDigital = 0;
     let servicesTotal = 0;
-    let servicesCount = filteredBookings.filter(b => b.status === 'completed').length;
+    let servicesCount = filteredBookings.filter(b => b.status === 'completed' || (b.isWalkin && b.status !== 'cancelled' && b.status !== 'no_show')).length;
 
     filteredBookings.forEach((b) => {
-      if (b.status !== 'completed') return;
+      const isCountable = b.status === 'completed' || (b.isWalkin && b.status !== 'cancelled' && b.status !== 'no_show');
+      if (!isCountable) return;
       let rawGross = 0;
       if (b.servicesList && b.servicesList.length > 0) {
         rawGross = b.servicesList.reduce((sum, s) => sum + (s.servicePrice || 0), 0);

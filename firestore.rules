@@ -200,5 +200,21 @@ service cloud.firestore {
       allow read: if true;
     }
 
+    // 17. All-in-One Daily Ledgers Collection (days/{YYYY-MM-DD})
+    match /days/{dayId} {
+      allow get: if isValidId(dayId);
+      allow list: if true;
+      allow create, update: if isValidId(dayId);
+      allow delete: if isValidId(dayId);
+    }
+
+    // 18. Superadmin Yearly Rollup Reports Collection (reports/{YYYY})
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId);
+      allow list: if true;
+      allow create, update: if isValidId(reportId);
+      allow delete: if isValidId(reportId);
+    }
+
   }
 }

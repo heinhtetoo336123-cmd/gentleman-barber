@@ -168,6 +168,9 @@ export default function App() {
 
     loadAllData();
 
+    // Auto-migration on first launch to Daily Ledger schema
+    api.runAutoMigrationIfPending().catch(() => {});
+
     // Unlock Web Audio context on first user interaction
     const handleUserInteraction = () => {
       getAudioContext();

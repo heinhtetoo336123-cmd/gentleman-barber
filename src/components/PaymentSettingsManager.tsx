@@ -22,7 +22,8 @@ import {
   Image as ImageIcon,
   Crop,
   RotateCcw,
-  X
+  X,
+  Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -50,6 +51,33 @@ export const PaymentSettingsManager: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Forced Migration State
+  const [migrationLoading, setMigrationLoading] = useState(false);
+  const [migrationToast, setMigrationToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleReRunMigration = async () => {
+    setMigrationLoading(true);
+    setMigrationToast(null);
+    try {
+      const res = await api.forceMigrateFromLegacyDatabase();
+      playSuccessChime();
+      setMigrationToast({
+        type: 'success',
+        text: `Re-migration Completed: ${res.bookingsCount} bookings, ${res.expensesCount} expenses, and ${res.salesCount} retail sales across ${res.datesCount} dates imported into barber-db!`
+      });
+      setTimeout(() => setMigrationToast(null), 8000);
+    } catch (err: any) {
+      playNotificationChime();
+      setMigrationToast({
+        type: 'error',
+        text: `Migration failed: ${err.message || 'Unknown error'}`
+      });
+      setTimeout(() => setMigrationToast(null), 8000);
+    } finally {
+      setMigrationLoading(false);
+    }
+  };
 
   // Logo Crop & Upload State
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
@@ -691,6 +719,75 @@ export const PaymentSettingsManager: React.FC = () => {
         </div>
 
       </form>
+
+      {/* SECTION: DATABASE & LEGACY IMPORT */}
+      <div className="bg-white border border-stone-200/90 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xs mt-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-stone-900 uppercase font-mono tracking-wider">
+                Database Cloud Sync: Legacy DB Migration
+              </h2>
+              <p className="text-xs text-stone-500 font-mono">
+                Import past bookings (e.g. 2026-09-30), expenses, and retail sales from legacy database into barber-db daily ledgers.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleReRunMigration}
+            disabled={migrationLoading}
+            className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-stone-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 cursor-pointer transition-all shadow-xs disabled:opacity-50 shrink-0"
+          >
+            {migrationLoading ? (
+              <>
+                <RotateCcw className="w-4 h-4 animate-spin" />
+                <span>Migrating Records...</span>
+              </>
+            ) : (
+              <>
+                <RotateCcw className="w-4 h-4" />
+                <span>Re-run Migration from Legacy DB</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success / Error Toast notification */}
+        <AnimatePresence>
+          {migrationToast && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className={`p-3.5 rounded-2xl text-xs font-mono font-medium flex items-center justify-between gap-2 border ${
+                migrationToast.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-950 border-emerald-200'
+                  : 'bg-rose-50 text-rose-950 border-rose-200'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                {migrationToast.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{migrationToast.text}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMigrationToast(null)}
+                className="text-stone-400 hover:text-stone-700 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* Branch Modal */}
       {isBranchModalOpen && (

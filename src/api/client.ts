@@ -1,5 +1,5 @@
-import { UserRole, Service, Designer, Booking, BookingServiceItem, BookingRetailItem, NotificationItem, NotificationType, AppStats, BookingStatus, UserProfile, PromoCode, PaymentSettings, AuditLog, ShopExpense, ExpensePreset, RetailProduct, RetailSale } from '../types';
-import { db } from '../lib/firebase';
+import { UserRole, Service, Designer, Booking, BookingServiceItem, BookingRetailItem, NotificationItem, NotificationType, AppStats, BookingStatus, UserProfile, PromoCode, PaymentSettings, AuditLog, ShopExpense, ExpensePreset, RetailProduct, RetailSale, DayLedger, DayLedgerSummary, YearlyReport, MonthSummary } from '../types';
+import { db, defaultDb, legacyDb } from '../lib/firebase';
 import {
   collection,
   doc,
@@ -381,6 +381,83 @@ export function markDatesAsLoaded(dates: string[]) {
 // Session in-memory cache for targeted date queries (Guarantees 0 redundant cloud reads within a session)
 const inMemoryDateBookingsCache = new Map<string, Booking[]>();
 
+// =========================================================================
+// ALL-IN-ONE DAILY LEDGER & YEARLY ROLLUP ARCHITECTURE
+// =========================================================================
+const inMemoryDayLedgerCache = new Map<string, DayLedger>();
+const inMemoryYearlyReportsCache = new Map<string, YearlyReport>();
+
+export function createEmptyDayLedger(date: string): DayLedger {
+  const cleanDate = (date || getLocalTodayStr()).split('T')[0];
+  return {
+    date: cleanDate,
+    updatedAt: Date.now(),
+    bookings: [],
+    retailSales: [],
+    expenses: [],
+    summary: {
+      totalRevenue: 0,
+      totalExpenses: 0,
+      netProfit: 0,
+      totalBookings: 0,
+    }
+  };
+}
+
+export function calculateDayLedgerSummary(
+  bookings: Booking[],
+  retailSales: RetailSale[],
+  expenses: ShopExpense[]
+): DayLedgerSummary {
+  const bookingsRevenue = (bookings || [])
+    .filter(b => b.status !== 'cancelled' && b.status !== 'held')
+    .reduce((sum, b) => {
+      const p = Number(
+        b.price ??
+        b.servicePrice ??
+        (b.servicesList && b.servicesList.length > 0
+          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+          : 0)
+      );
+      const discount = Number(b.discountAmount || 0);
+      return sum + Math.max(0, p - discount);
+    }, 0);
+
+  const retailRevenue = (retailSales || []).reduce((sum, r) => sum + (Number(r.totalPrice) || 0), 0);
+  const totalRevenue = bookingsRevenue + retailRevenue;
+
+  const totalExpenses = (expenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const netProfit = totalRevenue - totalExpenses;
+  const totalBookings = (bookings || []).filter(b => b.status !== 'cancelled' && b.status !== 'held').length;
+
+  return {
+    totalRevenue,
+    totalExpenses,
+    netProfit,
+    totalBookings,
+  };
+}
+
+export function createEmptyYearlyReport(year: string): YearlyReport {
+  const months: { [key: string]: MonthSummary } = {};
+  for (let i = 1; i <= 12; i++) {
+    const k = i.toString().padStart(2, '0');
+    months[k] = {
+      revenue: 0,
+      expenses: 0,
+      netProfit: 0,
+      bookingsCount: 0,
+    };
+  }
+  return {
+    year,
+    totalRevenue: 0,
+    totalExpenses: 0,
+    netProfit: 0,
+    months,
+  };
+}
+
 /**
  * Cache Invalidation Helper:
  * Pure local in-memory helper (DO NOT dispatch global invalidation events or wipe caches).
@@ -392,6 +469,640 @@ export function invalidateBookingDateCache(_date?: string, _bookingId?: string) 
 
 export const api = {
   invalidateBookingCache: invalidateBookingDateCache,
+
+  // =========================================================================
+  // ALL-IN-ONE DAILY LEDGER & YEARLY ROLLUP CORE API
+  // =========================================================================
+
+  /**
+   * Day-view fetch: reads doc(db, "days", date).
+   * If empty, returns a default zeroed ledger.
+   */
+  async getDayLedger(date: string): Promise<DayLedger> {
+    const cleanDate = (date || getLocalTodayStr()).split('T')[0];
+    if (inMemoryDayLedgerCache.has(cleanDate)) {
+      return inMemoryDayLedgerCache.get(cleanDate)!;
+    }
+
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const raw = sessionStorage.getItem(`baba_day_ledger_${cleanDate}`);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.date === cleanDate) {
+            inMemoryDayLedgerCache.set(cleanDate, parsed);
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const snap = await getDoc(doc(db, 'days', cleanDate));
+      if (snap.exists()) {
+        const data = snap.data() as DayLedger;
+        const ledger: DayLedger = {
+          date: cleanDate,
+          updatedAt: data.updatedAt || Date.now(),
+          bookings: Array.isArray(data.bookings) ? data.bookings : [],
+          retailSales: Array.isArray(data.retailSales) ? data.retailSales : [],
+          expenses: Array.isArray(data.expenses) ? data.expenses : [],
+          summary: data.summary || calculateDayLedgerSummary(data.bookings || [], data.retailSales || [], data.expenses || []),
+        };
+        inMemoryDayLedgerCache.set(cleanDate, ledger);
+        try {
+          sessionStorage.setItem(`baba_day_ledger_${cleanDate}`, JSON.stringify(ledger));
+        } catch {}
+        return ledger;
+      }
+    } catch (err) {
+      console.warn(`getDayLedger(${cleanDate}) fallback:`, err);
+    }
+
+    const emptyLedger = createEmptyDayLedger(cleanDate);
+    inMemoryDayLedgerCache.set(cleanDate, emptyLedger);
+    return emptyLedger;
+  },
+
+  /**
+   * Realtime listener: binds onSnapshot(doc(db, "days", date), ...).
+   */
+  subscribeToDayLedger(date: string, callback: (ledger: DayLedger) => void): () => void {
+    const cleanDate = (date || getLocalTodayStr()).split('T')[0];
+    if (inMemoryDayLedgerCache.has(cleanDate)) {
+      callback(inMemoryDayLedgerCache.get(cleanDate)!);
+    }
+
+    return onSnapshot(
+      doc(db, 'days', cleanDate),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as DayLedger;
+          const ledger: DayLedger = {
+            date: cleanDate,
+            updatedAt: data.updatedAt || Date.now(),
+            bookings: Array.isArray(data.bookings) ? data.bookings : [],
+            retailSales: Array.isArray(data.retailSales) ? data.retailSales : [],
+            expenses: Array.isArray(data.expenses) ? data.expenses : [],
+            summary: data.summary || calculateDayLedgerSummary(data.bookings || [], data.retailSales || [], data.expenses || []),
+          };
+          inMemoryDayLedgerCache.set(cleanDate, ledger);
+          try {
+            sessionStorage.setItem(`baba_day_ledger_${cleanDate}`, JSON.stringify(ledger));
+          } catch {}
+          callback(ledger);
+        } else {
+          const empty = createEmptyDayLedger(cleanDate);
+          callback(empty);
+        }
+      },
+      (err) => {
+        console.warn(`subscribeToDayLedger(${cleanDate}) notice:`, err);
+      }
+    );
+  },
+
+  /**
+   * Saves daily ledger to days/{date}, recalculates summary, updates memory/session cache,
+   * syncs local stores, and updates the yearly rollup reports/{YYYY}.
+   */
+  async saveDayLedgerAndRollup(ledger: DayLedger): Promise<void> {
+    const cleanDate = ledger.date.split('T')[0];
+    ledger.date = cleanDate;
+    ledger.updatedAt = Date.now();
+    ledger.bookings = (ledger.bookings || []).map((b) => {
+      if (typeof (b as any).designerAvatar === 'string' && (b as any).designerAvatar.length > 500) {
+        const copy = { ...b };
+        delete (copy as any).designerAvatar;
+        return copy;
+      }
+      return b;
+    });
+    ledger.summary = calculateDayLedgerSummary(ledger.bookings, ledger.retailSales, ledger.expenses);
+
+    inMemoryDayLedgerCache.set(cleanDate, ledger);
+    try {
+      sessionStorage.setItem(`baba_day_ledger_${cleanDate}`, JSON.stringify(ledger));
+    } catch {}
+
+    // Keep global UI stores synchronized
+    const currentBookings = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+    const otherBookings = currentBookings.filter(b => (b.date || '').split('T')[0] !== cleanDate);
+    const mergedBookings = sortBookingsMostRecentFirst([...ledger.bookings, ...otherBookings]);
+    setLocalData(LOCAL_BOOKINGS_KEY, mergedBookings);
+    notifyLocalSubscribers('bookings', mergedBookings);
+
+    const currentExpenses = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
+    const otherExpenses = currentExpenses.filter(e => (e.date || '').split('T')[0] !== cleanDate);
+    const mergedExpenses = [...ledger.expenses, ...otherExpenses];
+    setLocalData(LOCAL_EXPENSES_KEY, mergedExpenses);
+    notifyLocalSubscribers('expenses', mergedExpenses);
+
+    const currentSales = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
+    const otherSales = currentSales.filter(s => (s.date || '').split('T')[0] !== cleanDate);
+    const mergedSales = [...ledger.retailSales, ...otherSales];
+    setLocalData(LOCAL_RETAIL_SALES_KEY, mergedSales);
+    notifyLocalSubscribers('retail_sales', mergedSales);
+
+    // 1. Write single daily document: days/{cleanDate}
+    try {
+      await setDoc(doc(db, 'days', cleanDate), sanitizeForFirestore(ledger));
+    } catch (err) {
+      console.warn(`Error writing days/${cleanDate}:`, err);
+    }
+
+    // 2. Update Yearly Rollup reports/{YYYY}
+    try {
+      const [year, monthStr] = cleanDate.split('-');
+      if (year && monthStr) {
+        await this.updateYearlyRollupMonth(year, monthStr, cleanDate, ledger);
+      }
+    } catch (rollupErr) {
+      console.warn('Error updating yearly rollup:', rollupErr);
+    }
+  },
+
+  /**
+   * Updates reports/{YYYY} month bucket with latest day metrics.
+   */
+  async updateYearlyRollupMonth(year: string, monthStr: string, date: string, ledger: DayLedger): Promise<YearlyReport> {
+    let report = await this.getYearlyReport(year);
+    report.months = report.months || createEmptyYearlyReport(year).months;
+    if (!report.months[monthStr]) {
+      report.months[monthStr] = {
+        revenue: 0,
+        expenses: 0,
+        netProfit: 0,
+        bookingsCount: 0,
+      };
+    }
+
+    const mBucket: any = report.months[monthStr];
+    mBucket.days = mBucket.days || {};
+    mBucket.days[date] = {
+      revenue: ledger.summary.totalRevenue,
+      expenses: ledger.summary.totalExpenses,
+      netProfit: ledger.summary.netProfit,
+      bookingsCount: ledger.summary.totalBookings,
+    };
+
+    const daysArr: any[] = Object.values(mBucket.days);
+    mBucket.revenue = daysArr.reduce((s, d) => s + (Number(d.revenue) || 0), 0);
+    mBucket.expenses = daysArr.reduce((s, d) => s + (Number(d.expenses) || 0), 0);
+    mBucket.netProfit = mBucket.revenue - mBucket.expenses;
+    mBucket.bookingsCount = daysArr.reduce((s, d) => s + (Number(d.bookingsCount) || 0), 0);
+
+    const allMonths: MonthSummary[] = Object.values(report.months) as MonthSummary[];
+    report.totalRevenue = allMonths.reduce((s, m) => s + (Number(m.revenue) || 0), 0);
+    report.totalExpenses = allMonths.reduce((s, m) => s + (Number(m.expenses) || 0), 0);
+    report.netProfit = report.totalRevenue - report.totalExpenses;
+
+    inMemoryYearlyReportsCache.set(year, report);
+
+    try {
+      await setDoc(doc(db, 'reports', year), sanitizeForFirestore(report));
+    } catch (err) {
+      console.warn(`Error writing reports/${year}:`, err);
+    }
+
+    return report;
+  },
+
+  /**
+   * Superadmin Yearly Rollup: reads doc(db, "reports", year).
+   * 1 single read for the entire year's metrics!
+   */
+  async getYearlyReport(year: string): Promise<YearlyReport> {
+    const cleanYear = (year || new Date().getFullYear().toString()).trim();
+    if (inMemoryYearlyReportsCache.has(cleanYear)) {
+      return inMemoryYearlyReportsCache.get(cleanYear)!;
+    }
+
+    try {
+      const snap = await getDoc(doc(db, 'reports', cleanYear));
+      if (snap.exists()) {
+        const data = snap.data() as YearlyReport;
+        const rep: YearlyReport = {
+          year: cleanYear,
+          totalRevenue: Number(data.totalRevenue) || 0,
+          totalExpenses: Number(data.totalExpenses) || 0,
+          netProfit: Number(data.netProfit) || 0,
+          months: data.months || createEmptyYearlyReport(cleanYear).months,
+        };
+        inMemoryYearlyReportsCache.set(cleanYear, rep);
+        return rep;
+      }
+    } catch (err) {
+      console.warn(`getYearlyReport(${cleanYear}) fallback:`, err);
+    }
+
+    const empty = createEmptyYearlyReport(cleanYear);
+    inMemoryYearlyReportsCache.set(cleanYear, empty);
+    return empty;
+  },
+
+  /**
+   * Realtime listener for reports/{year}.
+   */
+  subscribeToYearlyReport(year: string, callback: (report: YearlyReport) => void): () => void {
+    const cleanYear = (year || new Date().getFullYear().toString()).trim();
+    if (inMemoryYearlyReportsCache.has(cleanYear)) {
+      callback(inMemoryYearlyReportsCache.get(cleanYear)!);
+    }
+
+    return onSnapshot(
+      doc(db, 'reports', cleanYear),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as YearlyReport;
+          const rep: YearlyReport = {
+            year: cleanYear,
+            totalRevenue: Number(data.totalRevenue) || 0,
+            totalExpenses: Number(data.totalExpenses) || 0,
+            netProfit: Number(data.netProfit) || 0,
+            months: data.months || createEmptyYearlyReport(cleanYear).months,
+          };
+          inMemoryYearlyReportsCache.set(cleanYear, rep);
+          callback(rep);
+        } else {
+          const empty = createEmptyYearlyReport(cleanYear);
+          callback(empty);
+        }
+      },
+      (err) => {
+        console.warn(`subscribeToYearlyReport(${cleanYear}) notice:`, err);
+      }
+    );
+  },
+
+  /**
+   * Upsert a booking into its calendar day's ledger.
+   */
+  async upsertBookingIntoDayLedger(booking: Booking): Promise<DayLedger> {
+    const cleanDate = (booking.date || getLocalTodayStr()).split('T')[0];
+    const ledger = await this.getDayLedger(cleanDate);
+    const idx = ledger.bookings.findIndex(b => b.id === booking.id);
+    if (idx >= 0) {
+      ledger.bookings[idx] = { ...ledger.bookings[idx], ...booking };
+    } else {
+      ledger.bookings.unshift(booking);
+    }
+    ledger.bookings = sortBookingsMostRecentFirst(ledger.bookings);
+    await this.saveDayLedgerAndRollup(ledger);
+    return ledger;
+  },
+
+  /**
+   * Remove a booking from its calendar day's ledger.
+   */
+  async removeBookingFromDayLedger(id: string, date: string): Promise<DayLedger> {
+    const cleanDate = (date || getLocalTodayStr()).split('T')[0];
+    const ledger = await this.getDayLedger(cleanDate);
+    ledger.bookings = ledger.bookings.filter(b => b.id !== id);
+    await this.saveDayLedgerAndRollup(ledger);
+    return ledger;
+  },
+
+  /**
+   * Auto-Migration on First Launch:
+   * Groups existing legacy records into days/{YYYY-MM-DD} and sets migration.done = true.
+   */
+  async runAutoMigrationIfPending(): Promise<void> {
+    try {
+      const migRef = doc(db, 'settings', 'migration');
+      let migSnap: any = null;
+      try {
+        migSnap = await getDoc(migRef);
+      } catch {}
+
+      if (
+        migSnap &&
+        migSnap.exists() &&
+        migSnap.data()?.done === true &&
+        migSnap.data()?.fromDefaultDb === true &&
+        Number(migSnap.data()?.legacyBookingsCount || 0) > 0
+      ) {
+        return;
+      }
+
+      console.log('Initiating Auto-Migration from legacy Firestore instance to barber-db...');
+
+      const sourceDbs = [legacyDb];
+      if (defaultDb !== legacyDb) {
+        sourceDbs.push(defaultDb);
+      }
+
+      let legacyBookings: Booking[] = [];
+      for (const sDb of sourceDbs) {
+        try {
+          const bSnap = await getDocs(query(collection(sDb, 'bookings'), limit(300)));
+          if (!bSnap.empty) {
+            const mapped = bSnap.docs
+              .map(parseBookingDoc)
+              .filter(b => !(b as any).isDeleted);
+            if (mapped.length > legacyBookings.length) {
+              legacyBookings = mapped;
+            }
+          }
+        } catch (bErr) {
+          console.warn('Legacy bookings fetch during migration notice:', bErr);
+        }
+      }
+
+      let legacyExpenses: ShopExpense[] = [];
+      for (const sDb of sourceDbs) {
+        try {
+          const eSnap = await getDocs(query(collection(sDb, 'shop_expenses'), limit(150)));
+          if (!eSnap.empty) {
+            const mapped = eSnap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
+            if (mapped.length > legacyExpenses.length) {
+              legacyExpenses = mapped;
+            }
+          }
+        } catch {}
+      }
+
+      let legacySales: RetailSale[] = [];
+      for (const sDb of sourceDbs) {
+        try {
+          const sSnap = await getDocs(query(collection(sDb, 'retail_sales'), limit(150)));
+          if (!sSnap.empty) {
+            const mapped = sSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
+            if (mapped.length > legacySales.length) {
+              legacySales = mapped;
+            }
+          }
+        } catch {}
+      }
+
+      // Clone Services & Designers to barber-db if barber-db is empty
+      for (const sDb of sourceDbs) {
+        try {
+          const curSrvSnap = await getDocs(query(collection(db, 'services'), limit(5)));
+          if (curSrvSnap.empty) {
+            const legSrvSnap = await getDocs(query(collection(sDb, 'services'), limit(100)));
+            if (!legSrvSnap.empty) {
+              for (const d of legSrvSnap.docs) {
+                await setDoc(doc(db, 'services', d.id), sanitizeForFirestore(d.data()));
+              }
+              const freshServices = legSrvSnap.docs
+                .map(d => ({ id: d.id, ...d.data() } as Service))
+                .filter(s => !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
+              setLocalData(LOCAL_SERVICES_KEY, freshServices);
+              notifyLocalSubscribers('services', freshServices);
+            }
+          }
+        } catch (e) {
+          console.warn('Migration clone services notice:', e);
+        }
+
+        try {
+          const curDesSnap = await getDocs(query(collection(db, 'designers'), limit(5)));
+          if (curDesSnap.empty) {
+            const legDesSnap = await getDocs(query(collection(sDb, 'designers'), limit(100)));
+            if (!legDesSnap.empty) {
+              for (const d of legDesSnap.docs) {
+                await setDoc(doc(db, 'designers', d.id), sanitizeForFirestore(d.data()));
+              }
+              const freshDesigners = legDesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Designer));
+              setLocalData(LOCAL_DESIGNERS_KEY, freshDesigners);
+              notifyLocalSubscribers('designers', freshDesigners);
+            }
+          }
+        } catch (e) {
+          console.warn('Migration clone designers notice:', e);
+        }
+
+        try {
+          const curSetSnap = await getDoc(doc(db, 'settings', 'payment_settings'));
+          if (!curSetSnap.exists()) {
+            const legSetSnap = await getDoc(doc(sDb, 'settings', 'payment_settings'));
+            if (legSetSnap.exists()) {
+              await setDoc(doc(db, 'settings', 'payment_settings'), sanitizeForFirestore(legSetSnap.data()));
+              setLocalData(LOCAL_SETTINGS_KEY, legSetSnap.data());
+              notifyLocalSubscribers('settings', legSetSnap.data());
+            }
+          }
+        } catch {}
+      }
+
+      // Copy legacy bookings to barber-db 'bookings' collection
+      for (const b of legacyBookings) {
+        try {
+          await setDoc(doc(db, 'bookings', b.id), sanitizeForFirestore(b));
+        } catch {}
+      }
+
+      const dateMap = new Map<string, { bookings: Booking[]; expenses: ShopExpense[]; sales: RetailSale[] }>();
+
+      legacyBookings.forEach(b => {
+        const d = (b.date || getLocalTodayStr()).split('T')[0];
+        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+        dateMap.get(d)!.bookings.push({ ...b });
+      });
+
+      legacyExpenses.forEach(e => {
+        const d = (e.date || getLocalTodayStr()).split('T')[0];
+        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+        dateMap.get(d)!.expenses.push({ ...e });
+      });
+
+      legacySales.forEach(s => {
+        const d = (s.date || getLocalTodayStr()).split('T')[0];
+        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+        dateMap.get(d)!.sales.push({ ...s });
+      });
+
+      for (const [date, data] of dateMap.entries()) {
+        const ledger = await this.getDayLedger(date);
+        const bMap = new Map<string, Booking>();
+        (ledger.bookings || []).forEach(b => bMap.set(b.id, b));
+        data.bookings.forEach(b => bMap.set(b.id, b));
+
+        const eMap = new Map<string, ShopExpense>();
+        (ledger.expenses || []).forEach(e => eMap.set(e.id, e));
+        data.expenses.forEach(e => eMap.set(e.id, e));
+
+        const sMap = new Map<string, RetailSale>();
+        (ledger.retailSales || []).forEach(s => sMap.set(s.id, s));
+        data.sales.forEach(s => sMap.set(s.id, s));
+
+        const mergedBookings = sortBookingsMostRecentFirst(Array.from(bMap.values()));
+        const mergedExpenses = Array.from(eMap.values());
+        const mergedSales = Array.from(sMap.values());
+
+        const updatedLedger: DayLedger = {
+          date,
+          updatedAt: Date.now(),
+          bookings: mergedBookings,
+          expenses: mergedExpenses,
+          retailSales: mergedSales,
+          summary: calculateDayLedgerSummary(mergedBookings, mergedSales, mergedExpenses),
+        };
+        await this.saveDayLedgerAndRollup(updatedLedger);
+      }
+
+      await setDoc(migRef, {
+        done: true,
+        fromDefaultDb: true,
+        migratedAt: new Date().toISOString(),
+        migratedDatesCount: dateMap.size,
+        legacyBookingsCount: legacyBookings.length,
+      });
+      console.log(`Auto-Migration completed: ${legacyBookings.length} bookings migrated to barber-db.`);
+    } catch (err) {
+      console.warn('Auto-Migration notice:', err);
+    }
+  },
+
+  /**
+   * Force One-Time Migration from Legacy Database to barber-db:
+   * Queries all existing records from the legacy database (bookings, expenses, retail sales),
+   * groups each record by its date string (YYYY-MM-DD), and writes/merges them into barber-db's days/{date} documents.
+   */
+  async forceMigrateFromLegacyDatabase(): Promise<{
+    success: boolean;
+    bookingsCount: number;
+    expensesCount: number;
+    salesCount: number;
+    datesCount: number;
+  }> {
+    console.log('Force migrating all records from legacy database to barber-db...');
+    const sourceDb = legacyDb || defaultDb;
+
+    const [bSnap, eSnap, sSnap, srvSnap, desSnap] = await Promise.all([
+      getDocs(collection(sourceDb, 'bookings')),
+      getDocs(collection(sourceDb, 'shop_expenses')),
+      getDocs(collection(sourceDb, 'retail_sales')),
+      getDocs(collection(sourceDb, 'services')),
+      getDocs(collection(sourceDb, 'designers')),
+    ]);
+
+    // 1. Migrate services & designers to barber-db to ensure full sync
+    const srvBatch = writeBatch(db);
+    for (const s of srvSnap.docs) {
+      srvBatch.set(doc(db, 'services', s.id), sanitizeForFirestore(s.data()));
+    }
+    for (const d of desSnap.docs) {
+      srvBatch.set(doc(db, 'designers', d.id), sanitizeForFirestore(d.data()));
+    }
+    await srvBatch.commit();
+
+    const freshServices = srvSnap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Service))
+      .filter(s => !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
+    setLocalData(LOCAL_SERVICES_KEY, freshServices);
+    notifyLocalSubscribers('services', freshServices);
+
+    const freshDesigners = desSnap.docs.map(d => ({ id: d.id, ...d.data() } as Designer));
+    setLocalData(LOCAL_DESIGNERS_KEY, freshDesigners);
+    notifyLocalSubscribers('designers', freshDesigners);
+
+    // 2. Group all records by date (YYYY-MM-DD)
+    const dateMap = new Map<string, { bookings: Booking[]; expenses: ShopExpense[]; sales: RetailSale[] }>();
+
+    for (const docSnap of bSnap.docs) {
+      const b = parseBookingDoc(docSnap);
+      if ((b as any).isDeleted) continue;
+      const d = (b.date || getLocalTodayStr()).split('T')[0];
+      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+      dateMap.get(d)!.bookings.push({ ...b });
+    }
+
+    for (const docSnap of eSnap.docs) {
+      const e = { id: docSnap.id, ...docSnap.data() } as ShopExpense;
+      const d = (e.date || getLocalTodayStr()).split('T')[0];
+      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+      dateMap.get(d)!.expenses.push(e);
+    }
+
+    for (const docSnap of sSnap.docs) {
+      const s = { id: docSnap.id, ...docSnap.data() } as RetailSale;
+      const d = (s.date || getLocalTodayStr()).split('T')[0];
+      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
+      dateMap.get(d)!.sales.push(s);
+    }
+
+    // 3. Write each date into days/{date} in barber-db
+    for (const [date, data] of dateMap.entries()) {
+      const existingLedger = await this.getDayLedger(date);
+      const bMap = new Map<string, Booking>();
+      (existingLedger.bookings || []).forEach(b => bMap.set(b.id, b));
+      data.bookings.forEach(b => bMap.set(b.id, b));
+
+      const eMap = new Map<string, ShopExpense>();
+      (existingLedger.expenses || []).forEach(e => eMap.set(e.id, e));
+      data.expenses.forEach(e => eMap.set(e.id, e));
+
+      const sMap = new Map<string, RetailSale>();
+      (existingLedger.retailSales || []).forEach(s => sMap.set(s.id, s));
+      data.sales.forEach(s => sMap.set(s.id, s));
+
+      const mergedBookings = sortBookingsMostRecentFirst(Array.from(bMap.values()));
+      const mergedExpenses = Array.from(eMap.values());
+      const mergedSales = Array.from(sMap.values());
+
+      const updatedLedger: DayLedger = {
+        date,
+        updatedAt: Date.now(),
+        bookings: mergedBookings,
+        expenses: mergedExpenses,
+        retailSales: mergedSales,
+        summary: calculateDayLedgerSummary(mergedBookings, mergedSales, mergedExpenses),
+      };
+      await this.saveDayLedgerAndRollup(updatedLedger);
+    }
+
+    // 4. Also write individual records into barber-db collections in chunks
+    const bookingDocs = bSnap.docs.map(parseBookingDoc);
+    for (let i = 0; i < bookingDocs.length; i += 150) {
+      const bBatch = writeBatch(db);
+      for (const b of bookingDocs.slice(i, i + 150)) {
+        bBatch.set(doc(db, 'bookings', b.id), sanitizeForFirestore(b));
+      }
+      await bBatch.commit();
+    }
+
+    for (const e of eSnap.docs) {
+      await setDoc(doc(db, 'shop_expenses', e.id), sanitizeForFirestore(e.data()));
+    }
+
+    for (const s of sSnap.docs) {
+      await setDoc(doc(db, 'retail_sales', s.id), sanitizeForFirestore(s.data()));
+    }
+
+    // Update migration flag
+    await setDoc(doc(db, 'settings', 'migration'), {
+      done: true,
+      fromDefaultDb: true,
+      migratedAt: new Date().toISOString(),
+      migratedDatesCount: dateMap.size,
+      legacyBookingsCount: bSnap.size,
+      legacyExpensesCount: eSnap.size,
+      legacySalesCount: sSnap.size,
+    });
+
+    // Sync global cached stores & notify subscribers
+    const allBookings = bookingDocs.filter(b => !(b as any).isDeleted);
+    setLocalData(LOCAL_BOOKINGS_KEY, allBookings);
+    notifyLocalSubscribers('bookings', allBookings);
+
+    const allExpenses = eSnap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
+    setLocalData(LOCAL_EXPENSES_KEY, allExpenses);
+    notifyLocalSubscribers('expenses', allExpenses);
+
+    const allSales = sSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
+    setLocalData(LOCAL_RETAIL_SALES_KEY, allSales);
+    notifyLocalSubscribers('retail_sales', allSales);
+
+    return {
+      success: true,
+      bookingsCount: bSnap.size,
+      expensesCount: eSnap.size,
+      salesCount: sSnap.size,
+      datesCount: dateMap.size,
+    };
+  },
   // --- Services API ---
   async getServices(): Promise<Service[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
@@ -972,122 +1683,28 @@ export const api = {
     status?: string;
     limitCount?: number;
   }): Promise<Booking[]> {
-    // 1. SPECIFIC DATE REQUESTED (e.g. Admin selected a past date in Date Picker):
+    // 1. SPECIFIC DATE REQUESTED (Daily Ledger single doc lookup doc(db, "days", date)):
     if (options?.date) {
       const targetDate = options.date.split('T')[0];
-
-      // Step 1: In-memory cache hit (0 network, 0 cloud reads)
-      if (inMemoryDateBookingsCache.has(targetDate)) {
-        let list = inMemoryDateBookingsCache.get(targetDate) || [];
-        if (options.designerId) {
-          list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-        }
-        if (options.status) {
-          list = list.filter(b => b.status === options.status);
-        }
-        return sortBookingsMostRecentFirst(list);
-      }
-
-      // Step 2: SessionStorage cache hit (0 network, 0 cloud reads, survives refreshes)
-      try {
-        if (typeof sessionStorage !== 'undefined') {
-          const sessionRaw = sessionStorage.getItem(`baba_hist_date_${targetDate}`);
-          if (sessionRaw) {
-            const parsed = JSON.parse(sessionRaw);
-            if (Array.isArray(parsed) && parsed.length >= 0) {
-              inMemoryDateBookingsCache.set(targetDate, parsed);
-              let list = parsed;
-              if (options.designerId) {
-                list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-              }
-              if (options.status) {
-                list = list.filter(b => b.status === options.status);
-              }
-              return sortBookingsMostRecentFirst(list);
-            }
-          }
-        }
-      } catch {}
-
-      // Step 3: Check persistent localStorage for target date records
-      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-      const inCacheForDate = cached.filter(b => (b.date || '').split('T')[0] === targetDate);
-      if (inCacheForDate.length > 0) {
-        inMemoryDateBookingsCache.set(targetDate, inCacheForDate);
-        try {
-          if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem(`baba_hist_date_${targetDate}`, JSON.stringify(inCacheForDate));
-          }
-        } catch {}
-        return sortBookingsMostRecentFirst(inCacheForDate);
-      }
-
-      // Step 4: Targeted Single-Day Query: query ONLY documents where `date == targetDate` (Never load full collection)
-      let fetchedForDate: Booking[] = [];
-
-      if (!canPerformNetworkFetch()) {
-        return sortBookingsMostRecentFirst(inCacheForDate);
-      }
-      if (tryAcquireFetchLock()) {
-        try {
-          const q = query(collection(db, 'bookings'), where('date', '==', targetDate), limit(20));
-          let snap;
-          try {
-            snap = await getDocsFromServer(q);
-          } catch {
-            snap = await getDocs(q);
-          }
-          fetchedForDate = snap.docs.map(parseBookingDoc);
-        } catch (err) {
-          console.warn('Direct Firestore targeted date fetch fallback:', err);
-        } finally {
-          releaseFetchLock();
-        }
-      }
-
-      fetchedForDate = sortBookingsMostRecentFirst(
-        fetchedForDate.filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
-      );
-
-      const resolvedList = fetchedForDate;
-
-      // Cache in memory AND in sessionStorage for 0-read reuse throughout this session
-      inMemoryDateBookingsCache.set(targetDate, resolvedList);
-      try {
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.setItem(`baba_hist_date_${targetDate}`, JSON.stringify(resolvedList));
-        }
-      } catch {}
-
-      // Store into persistent local cache
-      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-      const idMap = new Map<string, Booking>();
-      existing.forEach(b => idMap.set(b.id, b));
-      resolvedList.forEach(b => idMap.set(b.id, b));
-      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
-
-      setLocalData(LOCAL_BOOKINGS_KEY, merged);
-      notifyLocalSubscribers('bookings', merged);
-
-      let filtered = resolvedList;
+      const ledger = await this.getDayLedger(targetDate);
+      let list = ledger.bookings || [];
       if (options.designerId) {
-        filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
+        list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
       }
       if (options.status) {
-        filtered = filtered.filter(b => b.status === options.status);
+        list = list.filter(b => b.status === options.status);
       }
-      return sortBookingsMostRecentFirst(filtered);
+      return sortBookingsMostRecentFirst(list);
     }
 
-    // 2. DATE RANGE REQUESTED (e.g. startDate to endDate):
+    // 2. DATE RANGE REQUESTED:
     if (options?.startDate && options?.endDate) {
-      const sDate = options.startDate;
-      const eDate = options.endDate;
-      const rangeKey = `${sDate}_to_${eDate}`;
+      const sDate = options.startDate.split('T')[0];
+      const eDate = options.endDate.split('T')[0];
 
-      // In-memory cache hit: 0 network, 0 cloud reads
-      if (inMemoryDateBookingsCache.has(rangeKey)) {
-        let list = inMemoryDateBookingsCache.get(rangeKey) || [];
+      if (sDate === eDate) {
+        const ledger = await this.getDayLedger(sDate);
+        let list = ledger.bookings || [];
         if (options.designerId) {
           list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
         }
@@ -1098,70 +1715,9 @@ export const api = {
       }
 
       const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-      const inCacheRange = cached.filter(b => b.date && b.date >= sDate && b.date <= eDate);
+      let inCacheRange = cached.filter(b => b.date && b.date >= sDate && b.date <= eDate);
 
-      // Fetch on-demand strictly within the requested date boundary
-      let fetchedRange: Booking[] = [];
-
-      // Step A: Fast Server Proxy
-      try {
-        const resp = await fetch(`/api/firestore/bookings?startDate=${encodeURIComponent(sDate)}&endDate=${encodeURIComponent(eDate)}`);
-        if (resp.ok) {
-          const data = await resp.json();
-          if (Array.isArray(data) && data.length > 0) {
-            fetchedRange = data.map((d: any) => ({
-              ...d,
-              bookingCode: d.bookingCode || (d.id ? d.id.toUpperCase() : 'WLK-GUEST'),
-              designerAvatar: d.designerAvatar || '',
-              paymentSlipUrl: d.paymentSlipUrl || '',
-            }));
-          }
-        }
-      } catch {}
-
-      // Step B: Direct Firestore Server Fetch
-      if (fetchedRange.length === 0 && canPerformNetworkFetch() && tryAcquireFetchLock()) {
-        try {
-          const q = query(
-            collection(db, 'bookings'),
-            where('date', '>=', sDate),
-            where('date', '<=', eDate),
-            limit(20)
-          );
-          let snap;
-          try {
-            snap = await getDocsFromServer(q);
-          } catch {
-            snap = await getDocs(q);
-          }
-          fetchedRange = snap.docs.map(parseBookingDoc);
-        } catch (err) {
-          console.warn('Firestore targeted date range fetch fallback:', err);
-        } finally {
-          releaseFetchLock();
-        }
-      }
-
-      fetchedRange = sortBookingsMostRecentFirst(
-        fetchedRange.filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
-      );
-
-      const resolvedRange = fetchedRange.length > 0 ? fetchedRange : inCacheRange;
-
-      // Cache in memory for 0-read reuse
-      inMemoryDateBookingsCache.set(rangeKey, resolvedRange);
-
-      // Store into persistent local cache
-      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-      const idMap = new Map<string, Booking>();
-      existing.forEach(b => idMap.set(b.id, b));
-      resolvedRange.forEach(b => idMap.set(b.id, b));
-      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
-
-      setLocalData(LOCAL_BOOKINGS_KEY, merged);
-      notifyLocalSubscribers('bookings', merged);
-
-      let filtered = resolvedRange;
+      let filtered = inCacheRange;
       if (options.designerId) {
         filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
       }
@@ -1171,65 +1727,20 @@ export const api = {
       return sortBookingsMostRecentFirst(filtered);
     }
 
-    // 3. NO DATE SPECIFIED (Default Today's Schedule):
-    const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    if (cached && cached.length > 0) {
-      let filtered = cached;
-      if (options?.designerId) {
-        filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-      }
-      if (options?.status) {
-        filtered = filtered.filter(b => b.status === options.status);
-      }
-      if (options?.limitCount) {
-        filtered = filtered.slice(0, options.limitCount);
-      }
-      return sortBookingsMostRecentFirst(filtered);
+    // 3. NO DATE SPECIFIED (Default Today's Schedule via Day Ledger):
+    const todayStr = getLocalTodayStr();
+    const ledger = await this.getDayLedger(todayStr);
+    let list = ledger.bookings || [];
+    if (options?.designerId) {
+      list = list.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
     }
-
-    if (canPerformNetworkFetch() && tryAcquireFetchLock()) {
-      try {
-        const todayDates = getDeviceTodayQueryDates();
-        const q = todayDates.length > 1
-          ? query(collection(db, 'bookings'), where('date', 'in', todayDates), limit(20))
-          : query(collection(db, 'bookings'), where('date', '==', todayDates[0]), limit(20));
-
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const list = sortBookingsMostRecentFirst(
-            snap.docs
-              .map(parseBookingDoc)
-              .filter(b => !(b as any).isDeleted && (b.status !== 'held' || (b.holdExpiresAt && new Date(b.holdExpiresAt).getTime() > Date.now())))
-          );
-
-          const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-          const idMap = new Map<string, Booking>();
-          existing.forEach(b => idMap.set(b.id, b));
-          list.forEach(b => idMap.set(b.id, b));
-          const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
-          setLocalData(LOCAL_BOOKINGS_KEY, merged);
-          markDatesAsLoaded(todayDates);
-          notifyLocalSubscribers('bookings', merged);
-
-          let filtered = list;
-          if (options?.designerId) {
-            filtered = filtered.filter(b => b.designerId === options.designerId || (b as any).walkinBarberId === options.designerId);
-          }
-          if (options?.status) {
-            filtered = filtered.filter(b => b.status === options.status);
-          }
-          if (options?.limitCount) {
-            filtered = filtered.slice(0, Math.min(options.limitCount, 20));
-          }
-          return sortBookingsMostRecentFirst(filtered);
-        }
-      } catch (e) {
-        console.warn('Firestore getBookings fallback:', e);
-      } finally {
-        releaseFetchLock();
-      }
+    if (options?.status) {
+      list = list.filter(b => b.status === options.status);
     }
-    return sortBookingsMostRecentFirst(cached);
+    if (options?.limitCount) {
+      list = list.slice(0, Math.min(options.limitCount, 20));
+    }
+    return sortBookingsMostRecentFirst(list);
   },
 
   /**
@@ -1727,6 +2238,7 @@ export const api = {
 
     try {
       await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
+      await this.upsertBookingIntoDayLedger(newBooking);
 
       // Create Notification for Admin
       const notifId = `notif-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -1880,9 +2392,9 @@ export const api = {
       date: walkinData.date,
       timeSlot: walkinData.timeSlot,
       notes: walkinData.notes || 'Walk-in Client (ဆိုင်ရောက် ဧည့်သည်)',
-      status: walkinData.status || 'confirmed',
+      status: walkinData.status || 'completed',
       paymentMethod: walkinData.paymentMethod || 'cash',
-      paymentStatus: walkinData.paymentStatus || (walkinData.status === 'completed' ? 'verified' : 'unpaid'),
+      paymentStatus: walkinData.paymentStatus || 'verified',
       discountAmount: walkinData.discountAmount || 0,
       pointsUsed: 0,
       promoCode: '',
@@ -1902,6 +2414,7 @@ export const api = {
     try {
       // Strictly 1 Firestore write: touch ONLY the target document in bookings collection
       await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
+      await this.upsertBookingIntoDayLedger(newBooking);
 
       const notifId = `notif-wlk-${Date.now()}`;
       const adminNotif: NotificationItem = {
@@ -2150,6 +2663,19 @@ export const api = {
       console.warn('Firestore updateBookingStatus fallback:', e);
     }
 
+    // Synchronize All-in-One DayLedger
+    try {
+      const updatedBooking = { ...(target || {}), ...updates, id } as Booking;
+      if (newDate && target?.date && newDate !== target.date) {
+        await this.removeBookingFromDayLedger(id, target.date);
+        await this.upsertBookingIntoDayLedger(updatedBooking);
+      } else {
+        await this.upsertBookingIntoDayLedger(updatedBooking);
+      }
+    } catch (dayErr) {
+      console.warn('DayLedger updateBookingStatus notice:', dayErr);
+    }
+
     // Save notification in local state & notify subscribers
     const notifsList = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
     const updatedNotifs = [...notifsToSave, ...notifsList].slice(0, 50);
@@ -2173,6 +2699,19 @@ export const api = {
       await updateDoc(doc(db, 'bookings', id), sanitizeForFirestore(updates));
     } catch (e) {
       console.warn('Firestore updateBooking fallback:', e);
+    }
+
+    // Synchronize All-in-One DayLedger
+    try {
+      const updatedBooking = { ...(target || {}), ...updates, id } as Booking;
+      if (updates.date && target?.date && updates.date !== target.date) {
+        await this.removeBookingFromDayLedger(id, target.date);
+        await this.upsertBookingIntoDayLedger(updatedBooking);
+      } else {
+        await this.upsertBookingIntoDayLedger(updatedBooking);
+      }
+    } catch (dayErr) {
+      console.warn('DayLedger updateBooking notice:', dayErr);
     }
     const updated = current.map(b => (b.id === id ? { ...b, ...updates } : b));
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
@@ -2216,6 +2755,9 @@ export const api = {
     // 2. Direct document mutation: touch ONLY the single target document in bookings collection (strictly 1 write)
     try {
       await deleteDoc(doc(db, 'bookings', id));
+      if (targetDate) {
+        this.removeBookingFromDayLedger(id, targetDate).catch(() => {});
+      }
     } catch (e) {
       console.warn('Firestore direct deleteDoc error:', e);
       // Revert local state if cloud delete fails
@@ -2506,7 +3048,7 @@ export const api = {
       return local;
     }
     try {
-      const snap = await getDocs(collection(db, 'clients'));
+      const snap = await getDocs(query(collection(db, 'clients'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as UserProfile))
@@ -2525,7 +3067,7 @@ export const api = {
     try {
       // Purge Firestore clients
       try {
-        const clientSnap = await getDocs(collection(db, 'clients'));
+        const clientSnap = await getDocs(query(collection(db, 'clients'), limit(20)));
         for (const docItem of clientSnap.docs) {
           await deleteDoc(doc(db, 'clients', docItem.id));
         }
@@ -3026,7 +3568,7 @@ export const api = {
       return cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'promos'));
+      const snap = await getDocs(query(collection(db, 'promos'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as PromoCode));
         setLocalData(LOCAL_PROMOS_KEY, list);
@@ -3890,7 +4432,7 @@ export const api = {
       return filterDate ? cached.filter(e => e.date === filterDate) : cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'shop_expenses'));
+      const snap = await getDocs(query(collection(db, 'shop_expenses'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
         setLocalData(LOCAL_EXPENSES_KEY, list);
@@ -3956,6 +4498,16 @@ export const api = {
       console.warn('Firestore addExpense error:', err);
     }
 
+    // Synchronize All-in-One DayLedger
+    try {
+      const cleanDate = (newExpense.date || getLocalTodayStr()).split('T')[0];
+      const ledger = await this.getDayLedger(cleanDate);
+      ledger.expenses = [newExpense, ...ledger.expenses.filter(e => e.id !== newExpense.id)];
+      await this.saveDayLedgerAndRollup(ledger);
+    } catch (dayErr) {
+      console.warn('DayLedger addExpense notice:', dayErr);
+    }
+
     try {
       await this.addAuditLog(
         expense.recordedBy || 'Admin',
@@ -3969,6 +4521,7 @@ export const api = {
 
   async updateExpense(id: string, updates: Partial<ShopExpense>): Promise<void> {
     const current = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
+    const target = current.find(e => e.id === id);
     const updated = current.map(e => e.id === id ? { ...e, ...updates, updatedAt: new Date().toISOString() } : e);
     setLocalData(LOCAL_EXPENSES_KEY, updated);
     notifyLocalSubscribers('expenses', updated);
@@ -3981,10 +4534,19 @@ export const api = {
     } catch (err) {
       console.warn('Firestore updateExpense error:', err);
     }
+
+    // Synchronize All-in-One DayLedger
+    try {
+      const cleanDate = (updates.date || target?.date || getLocalTodayStr()).split('T')[0];
+      const ledger = await this.getDayLedger(cleanDate);
+      ledger.expenses = ledger.expenses.map(e => e.id === id ? { ...e, ...updates } : e);
+      await this.saveDayLedgerAndRollup(ledger);
+    } catch {}
   },
 
   async deleteExpense(id: string): Promise<void> {
     const current = getLocalData<ShopExpense[]>(LOCAL_EXPENSES_KEY, []);
+    const target = current.find(e => e.id === id);
     const updated = current.filter(e => e.id !== id);
     setLocalData(LOCAL_EXPENSES_KEY, updated);
     notifyLocalSubscribers('expenses', updated);
@@ -3994,6 +4556,16 @@ export const api = {
     } catch (err) {
       console.warn('Firestore deleteExpense error:', err);
     }
+
+    // Synchronize All-in-One DayLedger
+    try {
+      if (target?.date) {
+        const cleanDate = target.date.split('T')[0];
+        const ledger = await this.getDayLedger(cleanDate);
+        ledger.expenses = ledger.expenses.filter(e => e.id !== id);
+        await this.saveDayLedgerAndRollup(ledger);
+      }
+    } catch {}
   },
 
   async getExpensePresets(): Promise<ExpensePreset[]> {
@@ -4002,7 +4574,7 @@ export const api = {
       return cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'expense_presets'));
+      const snap = await getDocs(query(collection(db, 'expense_presets'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as ExpensePreset));
         setLocalData(LOCAL_EXPENSE_PRESETS_KEY, list);
@@ -4082,7 +4654,7 @@ export const api = {
       return cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'retail_products'));
+      const snap = await getDocs(query(collection(db, 'retail_products'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailProduct));
         setLocalData(LOCAL_PRODUCTS_KEY, list);
@@ -4158,7 +4730,7 @@ export const api = {
       return filterDate ? cached.filter(s => s.date === filterDate) : cached;
     }
     try {
-      const snap = await getDocs(collection(db, 'retail_sales'));
+      const snap = await getDocs(query(collection(db, 'retail_sales'), limit(20)));
       if (!snap.empty) {
         const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
         setLocalData(LOCAL_RETAIL_SALES_KEY, list);
@@ -4221,6 +4793,16 @@ export const api = {
       console.warn('Firestore addRetailSale error:', err);
     }
 
+    // Synchronize All-in-One DayLedger
+    try {
+      const cleanDate = (newSale.date || getLocalTodayStr()).split('T')[0];
+      const ledger = await this.getDayLedger(cleanDate);
+      ledger.retailSales = [newSale, ...ledger.retailSales.filter(s => s.id !== newSale.id)];
+      await this.saveDayLedgerAndRollup(ledger);
+    } catch (dayErr) {
+      console.warn('DayLedger addRetailSale notice:', dayErr);
+    }
+
     try {
       await this.addAuditLog(
         'Admin',
@@ -4234,6 +4816,7 @@ export const api = {
 
   async updateRetailSale(id: string, updates: Partial<RetailSale>): Promise<void> {
     const current = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
+    const target = current.find(s => s.id === id);
     const updated = current.map(s => s.id === id ? { ...s, ...updates, updatedAt: new Date().toISOString() } : s);
     setLocalData(LOCAL_RETAIL_SALES_KEY, updated);
     notifyLocalSubscribers('retail_sales', updated);
@@ -4246,10 +4829,19 @@ export const api = {
     } catch (err) {
       console.warn('Firestore updateRetailSale error:', err);
     }
+
+    // Synchronize All-in-One DayLedger
+    try {
+      const cleanDate = (updates.date || target?.date || getLocalTodayStr()).split('T')[0];
+      const ledger = await this.getDayLedger(cleanDate);
+      ledger.retailSales = ledger.retailSales.map(s => s.id === id ? { ...s, ...updates } : s);
+      await this.saveDayLedgerAndRollup(ledger);
+    } catch {}
   },
 
   async deleteRetailSale(id: string): Promise<void> {
     const current = getLocalData<RetailSale[]>(LOCAL_RETAIL_SALES_KEY, []);
+    const target = current.find(s => s.id === id);
     const updated = current.filter(s => s.id !== id);
     setLocalData(LOCAL_RETAIL_SALES_KEY, updated);
     notifyLocalSubscribers('retail_sales', updated);
@@ -4259,6 +4851,16 @@ export const api = {
     } catch (err) {
       console.warn('Firestore deleteRetailSale error:', err);
     }
+
+    // Synchronize All-in-One DayLedger
+    try {
+      if (target?.date) {
+        const cleanDate = target.date.split('T')[0];
+        const ledger = await this.getDayLedger(cleanDate);
+        ledger.retailSales = ledger.retailSales.filter(s => s.id !== id);
+        await this.saveDayLedgerAndRollup(ledger);
+      }
+    } catch {}
   },
 
   async resetDatabaseToZero(password: string): Promise<{ success: boolean; message?: string }> {
@@ -4276,7 +4878,7 @@ export const api = {
     const collectionsToWipe = ['bookings', 'clients', 'promos'];
     for (const colName of collectionsToWipe) {
       try {
-        const snap = await getDocs(collection(db, colName));
+        const snap = await getDocs(query(collection(db, colName), limit(20)));
         for (const docItem of snap.docs) {
           await deleteDoc(doc(db, colName, docItem.id));
         }
@@ -4365,7 +4967,7 @@ export const api = {
       // 4. Fetch genuine Services from Cloud
       try {
         purgeMockServicesFromFirestore();
-        const srvSnap = await getDocs(collection(db, 'services'));
+        const srvSnap = await getDocs(query(collection(db, 'services'), limit(20)));
         if (!srvSnap.empty) {
           const freshServices = srvSnap.docs
             .map(d => ({ id: d.id, ...d.data() } as Service))
@@ -4380,7 +4982,7 @@ export const api = {
 
       // 5. Fetch genuine Designers from Cloud
       try {
-        const desSnap = await getDocs(collection(db, 'designers'));
+        const desSnap = await getDocs(query(collection(db, 'designers'), limit(20)));
         if (!desSnap.empty) {
           const freshDesigners = desSnap.docs.map(d => ({ id: d.id, ...d.data() } as Designer));
           setLocalData(LOCAL_DESIGNERS_KEY, freshDesigners);
@@ -4393,7 +4995,7 @@ export const api = {
 
       // 6. Fetch genuine Bookings (Crucial for Service History) from Cloud
       try {
-        const bkSnap = await getDocs(collection(db, 'bookings'));
+        const bkSnap = await getDocs(query(collection(db, 'bookings'), limit(20)));
         if (!bkSnap.empty) {
           const freshBookings = bkSnap.docs.map(parseBookingDoc);
           const sorted = sortBookingsMostRecentFirst(freshBookings);
@@ -4407,7 +5009,7 @@ export const api = {
 
       // 7. Fetch genuine Clients from Cloud
       try {
-        const clientSnap = await getDocs(collection(db, 'clients'));
+        const clientSnap = await getDocs(query(collection(db, 'clients'), limit(20)));
         if (!clientSnap.empty) {
           const freshClients = clientSnap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
           setLocalData(LOCAL_CLIENTS_KEY, freshClients);
@@ -4420,7 +5022,7 @@ export const api = {
 
       // 8. Fetch genuine Promos from Cloud
       try {
-        const promoSnap = await getDocs(collection(db, 'promos'));
+        const promoSnap = await getDocs(query(collection(db, 'promos'), limit(20)));
         if (!promoSnap.empty) {
           const freshPromos = promoSnap.docs.map(d => ({ id: d.id, ...d.data() } as PromoCode));
           setLocalData(LOCAL_PROMOS_KEY, freshPromos);
@@ -4450,7 +5052,7 @@ export const api = {
 
       // 11. Fetch genuine Shop Expenses from Cloud
       try {
-        const expSnap = await getDocs(collection(db, 'shop_expenses'));
+        const expSnap = await getDocs(query(collection(db, 'shop_expenses'), limit(20)));
         if (!expSnap.empty) {
           const freshExpenses = expSnap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
           setLocalData(LOCAL_EXPENSES_KEY, freshExpenses);
@@ -4463,7 +5065,7 @@ export const api = {
 
       // 12. Fetch genuine Expense Presets from Cloud
       try {
-        const preSnap = await getDocs(collection(db, 'expense_presets'));
+        const preSnap = await getDocs(query(collection(db, 'expense_presets'), limit(20)));
         if (!preSnap.empty) {
           const freshPresets = preSnap.docs.map(d => ({ id: d.id, ...d.data() } as ExpensePreset));
           setLocalData(LOCAL_EXPENSE_PRESETS_KEY, freshPresets);
@@ -4476,7 +5078,7 @@ export const api = {
 
       // 13. Fetch genuine Retail Products (POS Inventory) from Cloud
       try {
-        const prodSnap = await getDocs(collection(db, 'retail_products'));
+        const prodSnap = await getDocs(query(collection(db, 'retail_products'), limit(20)));
         if (!prodSnap.empty) {
           const freshProducts = prodSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailProduct));
           setLocalData(LOCAL_PRODUCTS_KEY, freshProducts);
@@ -4489,7 +5091,7 @@ export const api = {
 
       // 14. Fetch genuine Retail Sales (POS History) from Cloud
       try {
-        const saleSnap = await getDocs(collection(db, 'retail_sales'));
+        const saleSnap = await getDocs(query(collection(db, 'retail_sales'), limit(20)));
         if (!saleSnap.empty) {
           const freshSales = saleSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
           setLocalData(LOCAL_RETAIL_SALES_KEY, freshSales);
@@ -4538,7 +5140,7 @@ export const api = {
     sampleGhostRecords: { id: string; [key: string]: any }[];
     ghostDocIds: string[];
   }> {
-    const snap = await getDocs(collection(db, 'bookings'));
+    const snap = await getDocs(query(collection(db, 'bookings'), limit(20)));
     let validClientBookingsCount = 0;
     let validWalkinsCount = 0;
     let ghostRecordsCount = 0;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Booking, Designer, Service, UserProfile, AuditLog, PaymentSettings } from '../types';
+import { Booking, Designer, Service, UserProfile, AuditLog, PaymentSettings, YearlyReport } from '../types';
 import { api } from '../api/client';
 import { formatPrice } from '../utils/formatters';
 import { getLocalTodayStr } from '../utils/timeSlots';
@@ -96,6 +96,21 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
   const [selectedYear, setSelectedYear] = useState<string>(currentYear);
   const [statementViewType, setStatementViewType] = useState<'monthly' | 'yearly'>('monthly');
   const [historicalReportBookings, setHistoricalReportBookings] = useState<Booking[]>([]);
+  const [yearlyReport, setYearlyReport] = useState<YearlyReport | null>(null);
+
+  // Superadmin Yearly Rollup: Read 1 single document reports/{selectedYear}
+  useEffect(() => {
+    if (selectedYear) {
+      api.getYearlyReport(selectedYear)
+        .then((rep) => setYearlyReport(rep))
+        .catch(() => {});
+
+      const unsub = api.subscribeToYearlyReport(selectedYear, (rep) => {
+        setYearlyReport(rep);
+      });
+      return () => unsub();
+    }
+  }, [selectedYear]);
 
   // On-Demand Historical Records: Only fetch when a specific month or year statement is selected
   useEffect(() => {
@@ -264,6 +279,26 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
     });
 
     return months.map((mStr) => {
+      const mNum = mStr.split('-')[1];
+      const mData = yearlyReport?.months?.[mNum];
+
+      const dateObj = new Date(`${mStr}-01`);
+      const monthName = dateObj.toLocaleDateString('en-US', { month: 'short' });
+
+      if (mData && (mData.revenue > 0 || mData.bookingsCount > 0 || mData.expenses > 0)) {
+        const gross = mData.revenue;
+        const comm = Math.round(gross * 0.5);
+        return {
+          monthCode: mStr,
+          monthName,
+          totalBookings: mData.bookingsCount,
+          completedCount: mData.bookingsCount,
+          grossRevenue: gross,
+          commissionPaid: comm,
+          shopNetProfit: mData.netProfit,
+        };
+      }
+
       const monthBookings = bookings.filter((b) => (b.date || '').startsWith(mStr) && b.status !== 'cancelled');
       const completed = monthBookings.filter((b) => b.status === 'completed');
       
@@ -286,9 +321,6 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
         comm += Math.round((netVal * cRate) / 100);
       });
 
-      const dateObj = new Date(`${mStr}-01`);
-      const monthName = dateObj.toLocaleDateString('en-US', { month: 'short' });
-
       return {
         monthCode: mStr,
         monthName,
@@ -299,7 +331,7 @@ export const SuperAdminReportsManager: React.FC<SuperAdminReportsManagerProps> =
         shopNetProfit: gross - comm,
       };
     });
-  }, [bookings, designers, selectedYear]);
+  }, [bookings, designers, selectedYear, yearlyReport]);
 
   // 3. Business Analytics & Intelligence Metrics
   const analyticsData = useMemo(() => {

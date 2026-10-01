@@ -303,3 +303,41 @@ export interface RetailSale {
   createdAt: string;
 }
 
+// =========================================================================
+// ALL-IN-ONE DAILY LEDGER & YEARLY ROLLUP ARCHITECTURE
+// =========================================================================
+
+export interface DayLedgerSummary {
+  totalRevenue: number;
+  totalExpenses: number;
+  netProfit: number;
+  totalBookings: number;
+}
+
+export interface DayLedger {
+  date: string; // "YYYY-MM-DD"
+  updatedAt: number;
+  bookings: Booking[];
+  retailSales: RetailSale[];
+  expenses: ShopExpense[];
+  summary: DayLedgerSummary;
+}
+
+export interface MonthSummary {
+  revenue: number;
+  expenses: number;
+  netProfit: number;
+  bookingsCount: number;
+}
+
+export interface YearlyReport {
+  year: string; // "YYYY"
+  totalRevenue: number;
+  totalExpenses: number;
+  netProfit: number;
+  months: {
+    [month: string]: MonthSummary;
+  };
+}
+
+
