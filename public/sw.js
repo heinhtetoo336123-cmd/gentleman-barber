@@ -1,5 +1,5 @@
 // Service Worker for GENTLEMEN Barber Lounge PWA, Auto-Updates & Web Push
-const SW_VERSION = 'v5.3.0';
+const SW_VERSION = 'v6.0.0';
 const CACHE_NAME = `gentlemen-cache-${SW_VERSION}`;
 
 // Precache essential static assets (exclude html/root to prevent stale html caching)

@@ -17,9 +17,10 @@ export interface BookingContextValue {
     note?: string,
     newDate?: string,
     newTimeSlot?: string,
-    adminReply?: string
+    adminReply?: string,
+    dateHint?: string
   ) => Promise<Booking>;
-  deleteBooking: (id: string) => Promise<boolean>;
+  deleteBooking: (id: string, dateHint?: string) => Promise<boolean>;
   refreshBookings: () => Promise<Booking[]>;
 }
 
@@ -88,9 +89,10 @@ export const BookingProvider: React.FC<{ children: ReactNode }> = ({ children })
       note?: string,
       newDate?: string,
       newTimeSlot?: string,
-      adminReply?: string
+      adminReply?: string,
+      dateHint?: string
     ) => {
-      const updated = await api.updateBookingStatus(id, status, note, newDate, newTimeSlot, adminReply);
+      const updated = await api.updateBookingStatus(id, status, note, newDate, newTimeSlot, adminReply, dateHint);
       setBookings(api.getCachedBookings());
       setStats(api.getCachedStats());
       return updated;
@@ -98,8 +100,8 @@ export const BookingProvider: React.FC<{ children: ReactNode }> = ({ children })
     []
   );
 
-  const deleteBooking = useCallback(async (id: string) => {
-    const success = await api.deleteBooking(id);
+  const deleteBooking = useCallback(async (id: string, dateHint?: string) => {
+    const success = await api.deleteBooking(id, dateHint);
     setBookings(api.getCachedBookings());
     setStats(api.getCachedStats());
     return success;

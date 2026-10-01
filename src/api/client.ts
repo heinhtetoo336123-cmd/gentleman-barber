@@ -1,5 +1,5 @@
 import { UserRole, Service, Designer, Booking, BookingServiceItem, BookingRetailItem, NotificationItem, NotificationType, AppStats, BookingStatus, UserProfile, PromoCode, PaymentSettings, AuditLog, ShopExpense, ExpensePreset, RetailProduct, RetailSale, DayLedger, DayLedgerSummary, YearlyReport, MonthSummary } from '../types';
-import { db, defaultDb, legacyDb } from '../lib/firebase';
+import { db } from '../lib/firebase';
 import {
   collection,
   doc,
@@ -758,351 +758,12 @@ export const api = {
   async removeBookingFromDayLedger(id: string, date: string): Promise<DayLedger> {
     const cleanDate = (date || getLocalTodayStr()).split('T')[0];
     const ledger = await this.getDayLedger(cleanDate);
-    ledger.bookings = ledger.bookings.filter(b => b.id !== id);
+    ledger.bookings = (ledger.bookings || []).filter(b => b.id !== id);
+    ledger.summary = calculateDayLedgerSummary(ledger.bookings, ledger.retailSales, ledger.expenses);
     await this.saveDayLedgerAndRollup(ledger);
     return ledger;
   },
 
-  /**
-   * Auto-Migration on First Launch:
-   * Groups existing legacy records into days/{YYYY-MM-DD} and sets migration.done = true.
-   */
-  async runAutoMigrationIfPending(): Promise<void> {
-    try {
-      const migRef = doc(db, 'settings', 'migration');
-      let migSnap: any = null;
-      try {
-        migSnap = await getDoc(migRef);
-      } catch {}
-
-      if (
-        migSnap &&
-        migSnap.exists() &&
-        migSnap.data()?.done === true &&
-        migSnap.data()?.fromDefaultDb === true &&
-        Number(migSnap.data()?.legacyBookingsCount || 0) > 0
-      ) {
-        return;
-      }
-
-      console.log('Initiating Auto-Migration from legacy Firestore instance to barber-db...');
-
-      const sourceDbs = [legacyDb];
-      if (defaultDb !== legacyDb) {
-        sourceDbs.push(defaultDb);
-      }
-
-      let legacyBookings: Booking[] = [];
-      for (const sDb of sourceDbs) {
-        try {
-          const bSnap = await getDocs(query(collection(sDb, 'bookings'), limit(300)));
-          if (!bSnap.empty) {
-            const mapped = bSnap.docs
-              .map(parseBookingDoc)
-              .filter(b => !(b as any).isDeleted);
-            if (mapped.length > legacyBookings.length) {
-              legacyBookings = mapped;
-            }
-          }
-        } catch (bErr) {
-          console.warn('Legacy bookings fetch during migration notice:', bErr);
-        }
-      }
-
-      let legacyExpenses: ShopExpense[] = [];
-      for (const sDb of sourceDbs) {
-        try {
-          const eSnap = await getDocs(query(collection(sDb, 'shop_expenses'), limit(150)));
-          if (!eSnap.empty) {
-            const mapped = eSnap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
-            if (mapped.length > legacyExpenses.length) {
-              legacyExpenses = mapped;
-            }
-          }
-        } catch {}
-      }
-
-      let legacySales: RetailSale[] = [];
-      for (const sDb of sourceDbs) {
-        try {
-          const sSnap = await getDocs(query(collection(sDb, 'retail_sales'), limit(150)));
-          if (!sSnap.empty) {
-            const mapped = sSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
-            if (mapped.length > legacySales.length) {
-              legacySales = mapped;
-            }
-          }
-        } catch {}
-      }
-
-      // Clone Services & Designers to barber-db if barber-db is empty
-      for (const sDb of sourceDbs) {
-        try {
-          const curSrvSnap = await getDocs(query(collection(db, 'services'), limit(5)));
-          if (curSrvSnap.empty) {
-            const legSrvSnap = await getDocs(query(collection(sDb, 'services'), limit(100)));
-            if (!legSrvSnap.empty) {
-              for (const d of legSrvSnap.docs) {
-                await setDoc(doc(db, 'services', d.id), sanitizeForFirestore(d.data()));
-              }
-              const freshServices = legSrvSnap.docs
-                .map(d => ({ id: d.id, ...d.data() } as Service))
-                .filter(s => !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-              setLocalData(LOCAL_SERVICES_KEY, freshServices);
-              notifyLocalSubscribers('services', freshServices);
-            }
-          }
-        } catch (e) {
-          console.warn('Migration clone services notice:', e);
-        }
-
-        try {
-          const curDesSnap = await getDocs(query(collection(db, 'designers'), limit(5)));
-          if (curDesSnap.empty) {
-            const legDesSnap = await getDocs(query(collection(sDb, 'designers'), limit(100)));
-            if (!legDesSnap.empty) {
-              for (const d of legDesSnap.docs) {
-                await setDoc(doc(db, 'designers', d.id), sanitizeForFirestore(d.data()));
-              }
-              const freshDesigners = legDesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Designer));
-              setLocalData(LOCAL_DESIGNERS_KEY, freshDesigners);
-              notifyLocalSubscribers('designers', freshDesigners);
-            }
-          }
-        } catch (e) {
-          console.warn('Migration clone designers notice:', e);
-        }
-
-        try {
-          const curSetSnap = await getDoc(doc(db, 'settings', 'payment_settings'));
-          if (!curSetSnap.exists()) {
-            const legSetSnap = await getDoc(doc(sDb, 'settings', 'payment_settings'));
-            if (legSetSnap.exists()) {
-              await setDoc(doc(db, 'settings', 'payment_settings'), sanitizeForFirestore(legSetSnap.data()));
-              setLocalData(LOCAL_SETTINGS_KEY, legSetSnap.data());
-              notifyLocalSubscribers('settings', legSetSnap.data());
-            }
-          }
-        } catch {}
-      }
-
-      // Copy legacy bookings to barber-db 'bookings' collection
-      for (const b of legacyBookings) {
-        try {
-          await setDoc(doc(db, 'bookings', b.id), sanitizeForFirestore(b));
-        } catch {}
-      }
-
-      const dateMap = new Map<string, { bookings: Booking[]; expenses: ShopExpense[]; sales: RetailSale[] }>();
-
-      legacyBookings.forEach(b => {
-        const d = (b.date || getLocalTodayStr()).split('T')[0];
-        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-        dateMap.get(d)!.bookings.push({ ...b });
-      });
-
-      legacyExpenses.forEach(e => {
-        const d = (e.date || getLocalTodayStr()).split('T')[0];
-        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-        dateMap.get(d)!.expenses.push({ ...e });
-      });
-
-      legacySales.forEach(s => {
-        const d = (s.date || getLocalTodayStr()).split('T')[0];
-        if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-        dateMap.get(d)!.sales.push({ ...s });
-      });
-
-      for (const [date, data] of dateMap.entries()) {
-        const ledger = await this.getDayLedger(date);
-        const bMap = new Map<string, Booking>();
-        (ledger.bookings || []).forEach(b => bMap.set(b.id, b));
-        data.bookings.forEach(b => bMap.set(b.id, b));
-
-        const eMap = new Map<string, ShopExpense>();
-        (ledger.expenses || []).forEach(e => eMap.set(e.id, e));
-        data.expenses.forEach(e => eMap.set(e.id, e));
-
-        const sMap = new Map<string, RetailSale>();
-        (ledger.retailSales || []).forEach(s => sMap.set(s.id, s));
-        data.sales.forEach(s => sMap.set(s.id, s));
-
-        const mergedBookings = sortBookingsMostRecentFirst(Array.from(bMap.values()));
-        const mergedExpenses = Array.from(eMap.values());
-        const mergedSales = Array.from(sMap.values());
-
-        const updatedLedger: DayLedger = {
-          date,
-          updatedAt: Date.now(),
-          bookings: mergedBookings,
-          expenses: mergedExpenses,
-          retailSales: mergedSales,
-          summary: calculateDayLedgerSummary(mergedBookings, mergedSales, mergedExpenses),
-        };
-        await this.saveDayLedgerAndRollup(updatedLedger);
-      }
-
-      await setDoc(migRef, {
-        done: true,
-        fromDefaultDb: true,
-        migratedAt: new Date().toISOString(),
-        migratedDatesCount: dateMap.size,
-        legacyBookingsCount: legacyBookings.length,
-      });
-      console.log(`Auto-Migration completed: ${legacyBookings.length} bookings migrated to barber-db.`);
-    } catch (err) {
-      console.warn('Auto-Migration notice:', err);
-    }
-  },
-
-  /**
-   * Force One-Time Migration from Legacy Database to barber-db:
-   * Queries all existing records from the legacy database (bookings, expenses, retail sales),
-   * groups each record by its date string (YYYY-MM-DD), and writes/merges them into barber-db's days/{date} documents.
-   */
-  async forceMigrateFromLegacyDatabase(): Promise<{
-    success: boolean;
-    bookingsCount: number;
-    expensesCount: number;
-    salesCount: number;
-    datesCount: number;
-  }> {
-    console.log('Force migrating all records from legacy database to barber-db...');
-    const sourceDb = legacyDb || defaultDb;
-
-    const [bSnap, eSnap, sSnap, srvSnap, desSnap] = await Promise.all([
-      getDocs(collection(sourceDb, 'bookings')),
-      getDocs(collection(sourceDb, 'shop_expenses')),
-      getDocs(collection(sourceDb, 'retail_sales')),
-      getDocs(collection(sourceDb, 'services')),
-      getDocs(collection(sourceDb, 'designers')),
-    ]);
-
-    // 1. Migrate services & designers to barber-db to ensure full sync
-    const srvBatch = writeBatch(db);
-    for (const s of srvSnap.docs) {
-      srvBatch.set(doc(db, 'services', s.id), sanitizeForFirestore(s.data()));
-    }
-    for (const d of desSnap.docs) {
-      srvBatch.set(doc(db, 'designers', d.id), sanitizeForFirestore(d.data()));
-    }
-    await srvBatch.commit();
-
-    const freshServices = srvSnap.docs
-      .map(d => ({ id: d.id, ...d.data() } as Service))
-      .filter(s => !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-    setLocalData(LOCAL_SERVICES_KEY, freshServices);
-    notifyLocalSubscribers('services', freshServices);
-
-    const freshDesigners = desSnap.docs.map(d => ({ id: d.id, ...d.data() } as Designer));
-    setLocalData(LOCAL_DESIGNERS_KEY, freshDesigners);
-    notifyLocalSubscribers('designers', freshDesigners);
-
-    // 2. Group all records by date (YYYY-MM-DD)
-    const dateMap = new Map<string, { bookings: Booking[]; expenses: ShopExpense[]; sales: RetailSale[] }>();
-
-    for (const docSnap of bSnap.docs) {
-      const b = parseBookingDoc(docSnap);
-      if ((b as any).isDeleted) continue;
-      const d = (b.date || getLocalTodayStr()).split('T')[0];
-      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-      dateMap.get(d)!.bookings.push({ ...b });
-    }
-
-    for (const docSnap of eSnap.docs) {
-      const e = { id: docSnap.id, ...docSnap.data() } as ShopExpense;
-      const d = (e.date || getLocalTodayStr()).split('T')[0];
-      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-      dateMap.get(d)!.expenses.push(e);
-    }
-
-    for (const docSnap of sSnap.docs) {
-      const s = { id: docSnap.id, ...docSnap.data() } as RetailSale;
-      const d = (s.date || getLocalTodayStr()).split('T')[0];
-      if (!dateMap.has(d)) dateMap.set(d, { bookings: [], expenses: [], sales: [] });
-      dateMap.get(d)!.sales.push(s);
-    }
-
-    // 3. Write each date into days/{date} in barber-db
-    for (const [date, data] of dateMap.entries()) {
-      const existingLedger = await this.getDayLedger(date);
-      const bMap = new Map<string, Booking>();
-      (existingLedger.bookings || []).forEach(b => bMap.set(b.id, b));
-      data.bookings.forEach(b => bMap.set(b.id, b));
-
-      const eMap = new Map<string, ShopExpense>();
-      (existingLedger.expenses || []).forEach(e => eMap.set(e.id, e));
-      data.expenses.forEach(e => eMap.set(e.id, e));
-
-      const sMap = new Map<string, RetailSale>();
-      (existingLedger.retailSales || []).forEach(s => sMap.set(s.id, s));
-      data.sales.forEach(s => sMap.set(s.id, s));
-
-      const mergedBookings = sortBookingsMostRecentFirst(Array.from(bMap.values()));
-      const mergedExpenses = Array.from(eMap.values());
-      const mergedSales = Array.from(sMap.values());
-
-      const updatedLedger: DayLedger = {
-        date,
-        updatedAt: Date.now(),
-        bookings: mergedBookings,
-        expenses: mergedExpenses,
-        retailSales: mergedSales,
-        summary: calculateDayLedgerSummary(mergedBookings, mergedSales, mergedExpenses),
-      };
-      await this.saveDayLedgerAndRollup(updatedLedger);
-    }
-
-    // 4. Also write individual records into barber-db collections in chunks
-    const bookingDocs = bSnap.docs.map(parseBookingDoc);
-    for (let i = 0; i < bookingDocs.length; i += 150) {
-      const bBatch = writeBatch(db);
-      for (const b of bookingDocs.slice(i, i + 150)) {
-        bBatch.set(doc(db, 'bookings', b.id), sanitizeForFirestore(b));
-      }
-      await bBatch.commit();
-    }
-
-    for (const e of eSnap.docs) {
-      await setDoc(doc(db, 'shop_expenses', e.id), sanitizeForFirestore(e.data()));
-    }
-
-    for (const s of sSnap.docs) {
-      await setDoc(doc(db, 'retail_sales', s.id), sanitizeForFirestore(s.data()));
-    }
-
-    // Update migration flag
-    await setDoc(doc(db, 'settings', 'migration'), {
-      done: true,
-      fromDefaultDb: true,
-      migratedAt: new Date().toISOString(),
-      migratedDatesCount: dateMap.size,
-      legacyBookingsCount: bSnap.size,
-      legacyExpensesCount: eSnap.size,
-      legacySalesCount: sSnap.size,
-    });
-
-    // Sync global cached stores & notify subscribers
-    const allBookings = bookingDocs.filter(b => !(b as any).isDeleted);
-    setLocalData(LOCAL_BOOKINGS_KEY, allBookings);
-    notifyLocalSubscribers('bookings', allBookings);
-
-    const allExpenses = eSnap.docs.map(d => ({ id: d.id, ...d.data() } as ShopExpense));
-    setLocalData(LOCAL_EXPENSES_KEY, allExpenses);
-    notifyLocalSubscribers('expenses', allExpenses);
-
-    const allSales = sSnap.docs.map(d => ({ id: d.id, ...d.data() } as RetailSale));
-    setLocalData(LOCAL_RETAIL_SALES_KEY, allSales);
-    notifyLocalSubscribers('retail_sales', allSales);
-
-    return {
-      success: true,
-      bookingsCount: bSnap.size,
-      expensesCount: eSnap.size,
-      salesCount: sSnap.size,
-      datesCount: dateMap.size,
-    };
-  },
   // --- Services API ---
   async getServices(): Promise<Service[]> {
     const deleted = getDeletedIds(LOCAL_DELETED_SRV_KEY);
@@ -2517,11 +2178,40 @@ export const api = {
     note?: string,
     newDate?: string,
     newTimeSlot?: string,
-    adminReply?: string
+    adminReply?: string,
+    dateHint?: string
   ): Promise<Booking> {
     const now = new Date().toISOString();
-    const currentList = this.getCachedBookings();
-    const target = currentList.find(b => b.id === id);
+
+    // 1. Locate target booking to guarantee we know its appointment date and customer details
+    let target = this.getCachedBookings().find(b => b.id === id);
+    if (!target) {
+      for (const ledger of inMemoryDayLedgerCache.values()) {
+        const found = (ledger.bookings || []).find(b => b.id === id);
+        if (found) {
+          target = found;
+          break;
+        }
+      }
+    }
+    if (!target && dateHint) {
+      try {
+        const ledger = await this.getDayLedger(dateHint.split('T')[0]);
+        target = (ledger.bookings || []).find(b => b.id === id);
+      } catch {}
+    }
+    if (!target) {
+      try {
+        const snap = await getDoc(doc(db, 'bookings', id));
+        if (snap.exists()) {
+          target = parseBookingDoc(snap);
+        }
+      } catch (docErr) {
+        console.warn('Could not fetch booking doc for status update:', docErr);
+      }
+    }
+
+    const appointmentDate = (newDate || target?.date || dateHint || getLocalTodayStr()).split('T')[0];
 
     let statusNote = note || adminReply || `Status changed to ${status}`;
     if (newDate || newTimeSlot) {
@@ -2657,10 +2347,15 @@ export const api = {
       notifsToSave.push(adminWalkinNotif);
     }
 
+    // Update standalone document in bookings/{id}
     try {
       await updateDoc(doc(db, 'bookings', id), sanitizeForFirestore(updates));
     } catch (e) {
-      console.warn('Firestore updateBookingStatus fallback:', e);
+      try {
+        await setDoc(doc(db, 'bookings', id), sanitizeForFirestore({ ...updates, id }), { merge: true });
+      } catch (e2) {
+        console.warn('Firestore updateBookingStatus fallback:', e2);
+      }
     }
 
     // Synchronize All-in-One DayLedger
@@ -2670,7 +2365,16 @@ export const api = {
         await this.removeBookingFromDayLedger(id, target.date);
         await this.upsertBookingIntoDayLedger(updatedBooking);
       } else {
-        await this.upsertBookingIntoDayLedger(updatedBooking);
+        const ledger = await this.getDayLedger(appointmentDate);
+        const idx = (ledger.bookings || []).findIndex(b => b.id === id);
+        if (idx >= 0) {
+          ledger.bookings[idx] = { ...ledger.bookings[idx], ...updates };
+        } else {
+          ledger.bookings.unshift(updatedBooking);
+        }
+        ledger.bookings = sortBookingsMostRecentFirst(ledger.bookings);
+        ledger.summary = calculateDayLedgerSummary(ledger.bookings, ledger.retailSales, ledger.expenses);
+        await this.saveDayLedgerAndRollup(ledger);
       }
     } catch (dayErr) {
       console.warn('DayLedger updateBookingStatus notice:', dayErr);
@@ -2682,23 +2386,54 @@ export const api = {
     setLocalData(LOCAL_NOTIFS_KEY, updatedNotifs);
     notifyLocalSubscribers('notifications', updatedNotifs);
 
-    // Dispatch to cross-device cloud queue (e.g. Admin walkin completion rating notification)
+    // Dispatch to cross-device cloud queue
     notifsToSave.forEach(n => this.dispatchCrossDeviceNotification(n).catch(() => {}));
 
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     const updated = current.map(b => (b.id === id ? { ...b, ...updates } : b));
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
+    invalidateBookingDateCache(appointmentDate, id);
     return updated.find(b => b.id === id)!;
   },
 
-  async updateBooking(id: string, updates: Partial<Booking>): Promise<Booking | null> {
+  async updateBooking(id: string, updates: Partial<Booking>, dateHint?: string): Promise<Booking | null> {
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    const target = current.find(b => b.id === id);
+    let target = current.find(b => b.id === id);
+    if (!target) {
+      for (const ledger of inMemoryDayLedgerCache.values()) {
+        const found = (ledger.bookings || []).find(b => b.id === id);
+        if (found) {
+          target = found;
+          break;
+        }
+      }
+    }
+    if (!target && dateHint) {
+      try {
+        const ledger = await this.getDayLedger(dateHint.split('T')[0]);
+        target = (ledger.bookings || []).find(b => b.id === id);
+      } catch {}
+    }
+    if (!target) {
+      try {
+        const snap = await getDoc(doc(db, 'bookings', id));
+        if (snap.exists()) {
+          target = parseBookingDoc(snap);
+        }
+      } catch {}
+    }
+
+    const appointmentDate = (updates.date || target?.date || dateHint || getLocalTodayStr()).split('T')[0];
+
     try {
       await updateDoc(doc(db, 'bookings', id), sanitizeForFirestore(updates));
     } catch (e) {
-      console.warn('Firestore updateBooking fallback:', e);
+      try {
+        await setDoc(doc(db, 'bookings', id), sanitizeForFirestore({ ...updates, id }), { merge: true });
+      } catch (e2) {
+        console.warn('Firestore updateBooking fallback:', e2);
+      }
     }
 
     // Synchronize All-in-One DayLedger
@@ -2708,7 +2443,16 @@ export const api = {
         await this.removeBookingFromDayLedger(id, target.date);
         await this.upsertBookingIntoDayLedger(updatedBooking);
       } else {
-        await this.upsertBookingIntoDayLedger(updatedBooking);
+        const ledger = await this.getDayLedger(appointmentDate);
+        const idx = (ledger.bookings || []).findIndex(b => b.id === id);
+        if (idx >= 0) {
+          ledger.bookings[idx] = { ...ledger.bookings[idx], ...updates };
+        } else {
+          ledger.bookings.unshift(updatedBooking);
+        }
+        ledger.bookings = sortBookingsMostRecentFirst(ledger.bookings);
+        ledger.summary = calculateDayLedgerSummary(ledger.bookings, ledger.retailSales, ledger.expenses);
+        await this.saveDayLedgerAndRollup(ledger);
       }
     } catch (dayErr) {
       console.warn('DayLedger updateBooking notice:', dayErr);
@@ -2716,7 +2460,7 @@ export const api = {
     const updated = current.map(b => (b.id === id ? { ...b, ...updates } : b));
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
-    invalidateBookingDateCache(target?.date || updates.date, id);
+    invalidateBookingDateCache(appointmentDate, id);
 
     try {
       this.addAuditLog(
@@ -2742,32 +2486,59 @@ export const api = {
     return updated.find(b => b.id === id) || null;
   },
 
-  async deleteBooking(id: string): Promise<boolean> {
-    // 1. Optimistic update: instantly remove from local cache for 0ms UI latency
+  async deleteBooking(id: string, dateHint?: string): Promise<boolean> {
+    // 1. Locate target booking to determine its calendar date
     const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-    const target = current.find(b => b.id === id);
-    const targetDate = target?.date;
+    let target = current.find(b => b.id === id);
+
+    if (!target) {
+      for (const ledger of inMemoryDayLedgerCache.values()) {
+        const found = (ledger.bookings || []).find(b => b.id === id);
+        if (found) {
+          target = found;
+          break;
+        }
+      }
+    }
+
+    if (!target && dateHint) {
+      try {
+        const ledger = await this.getDayLedger(dateHint.split('T')[0]);
+        target = (ledger.bookings || []).find(b => b.id === id);
+      } catch {}
+    }
+
+    if (!target) {
+      try {
+        const snap = await getDoc(doc(db, 'bookings', id));
+        if (snap.exists()) {
+          target = parseBookingDoc(snap);
+        }
+      } catch {}
+    }
+
+    const cleanDate = (dateHint || target?.date || getLocalTodayStr()).split('T')[0];
+
+    // 2. Optimistic update: instantly remove from local cache for 0ms UI latency
     const updated = current.filter(b => b.id !== id);
     setLocalData(LOCAL_BOOKINGS_KEY, updated);
     notifyLocalSubscribers('bookings', updated);
-    invalidateBookingDateCache(targetDate, id);
+    invalidateBookingDateCache(cleanDate, id);
 
-    // 2. Direct document mutation: touch ONLY the single target document in bookings collection (strictly 1 write)
+    // 3. Remove booking from days/{date}.bookings array, recalculate summary & save
+    try {
+      await this.removeBookingFromDayLedger(id, cleanDate);
+    } catch (dayErr) {
+      console.warn(`removeBookingFromDayLedger error for ${id} on ${cleanDate}:`, dayErr);
+    }
+
+    // 4. Delete standalone bookings/{id} document from barber-db if it exists
     try {
       await deleteDoc(doc(db, 'bookings', id));
-      if (targetDate) {
-        this.removeBookingFromDayLedger(id, targetDate).catch(() => {});
-      }
     } catch (e) {
-      console.warn('Firestore direct deleteDoc error:', e);
-      // Revert local state if cloud delete fails
-      if (target) {
-        const rollback = [target, ...getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []).filter(b => b.id !== id)];
-        setLocalData(LOCAL_BOOKINGS_KEY, rollback);
-        notifyLocalSubscribers('bookings', rollback);
-      }
-      throw e;
+      console.warn('Firestore direct deleteDoc bookings error:', e);
     }
+
     return true;
   },
 
@@ -2780,7 +2551,7 @@ export const api = {
     notifyLocalSubscribers('bookings', updated);
     invalidateBookingDateCache();
 
-    // Also delete from Firestore if possible
+    // 1. Delete standalone bookings
     try {
       const idsToDelete = onlyCompletedAndCancelled
         ? current.filter(b => b.status === 'completed' || b.status === 'cancelled').map(b => b.id)
@@ -2789,12 +2560,30 @@ export const api = {
       for (const id of idsToDelete) {
         try {
           await deleteDoc(doc(db, 'bookings', id));
-        } catch {
-          // ignore single doc failure
-        }
+        } catch {}
       }
     } catch (e) {
       console.warn('Firestore clearBookingHistory fallback:', e);
+    }
+
+    // 2. Also remove from days/{date} Daily Ledgers and recalculate summary
+    try {
+      const daysSnap = await getDocs(collection(db, 'days'));
+      for (const dSnap of daysSnap.docs) {
+        const ledger = dSnap.data() as DayLedger;
+        if (Array.isArray(ledger.bookings) && ledger.bookings.length > 0) {
+          const origLen = ledger.bookings.length;
+          ledger.bookings = onlyCompletedAndCancelled
+            ? ledger.bookings.filter(b => b.status !== 'completed' && b.status !== 'cancelled')
+            : [];
+          if (ledger.bookings.length !== origLen) {
+            ledger.summary = calculateDayLedgerSummary(ledger.bookings, ledger.retailSales, ledger.expenses);
+            await this.saveDayLedgerAndRollup(ledger);
+          }
+        }
+      }
+    } catch (dayErr) {
+      console.warn('DayLedger clearBookingHistory notice:', dayErr);
     }
 
     return true;

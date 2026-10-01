@@ -15,9 +15,9 @@ export interface UseBookingsReturn {
   isLoading: boolean;
   createBooking: (data: Parameters<typeof api.createBooking>[0]) => Promise<Booking>;
   createWalkinBooking: (data: Parameters<typeof api.createWalkinBooking>[0]) => Promise<Booking>;
-  updateStatus: (id: string, newStatus: BookingStatus, note?: string, newDate?: string, newTimeSlot?: string, adminReply?: string) => Promise<Booking>;
-  updateBooking: (id: string, updates: Partial<Booking>) => Promise<Booking>;
-  deleteBooking: (id: string) => Promise<boolean>;
+  updateStatus: (id: string, newStatus: BookingStatus, note?: string, newDate?: string, newTimeSlot?: string, adminReply?: string, dateHint?: string) => Promise<Booking>;
+  updateBooking: (id: string, updates: Partial<Booking>, dateHint?: string) => Promise<Booking>;
+  deleteBooking: (id: string, dateHint?: string) => Promise<boolean>;
   refresh: () => Promise<Booking[]>;
 }
 
@@ -73,19 +73,20 @@ export function useBookings(options: UseBookingsOptions = {}): UseBookingsReturn
       note?: string,
       newDate?: string,
       newTimeSlot?: string,
-      adminReply?: string
+      adminReply?: string,
+      dateHint?: string
     ): Promise<Booking> => {
-      return await api.updateBookingStatus(id, newStatus, note, newDate, newTimeSlot, adminReply);
+      return await api.updateBookingStatus(id, newStatus, note, newDate, newTimeSlot, adminReply, dateHint);
     },
     []
   );
 
-  const updateBooking = useCallback(async (id: string, updates: Partial<Booking>): Promise<Booking> => {
-    return await api.updateBooking(id, updates);
+  const updateBooking = useCallback(async (id: string, updates: Partial<Booking>, dateHint?: string): Promise<Booking> => {
+    return (await api.updateBooking(id, updates, dateHint)) || ({} as Booking);
   }, []);
 
-  const deleteBooking = useCallback(async (id: string): Promise<boolean> => {
-    return await api.deleteBooking(id);
+  const deleteBooking = useCallback(async (id: string, dateHint?: string): Promise<boolean> => {
+    return await api.deleteBooking(id, dateHint);
   }, []);
 
   const refresh = useCallback(async (): Promise<Booking[]> => {

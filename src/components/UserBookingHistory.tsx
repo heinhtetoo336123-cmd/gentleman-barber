@@ -148,11 +148,11 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
     return true;
   });
 
-  const handleCancel = async (id: string) => {
+  const handleCancel = async (id: string, date?: string) => {
     if (!window.confirm('ဒီဘိုကင်ကို ပယ်ဖျက်ရန် သေချာပါသလား?')) return;
     setCancellingId(id);
     try {
-      await api.updateBookingStatus(id, 'cancelled');
+      await api.updateBookingStatus(id, 'cancelled', 'Client cancelled via App', undefined, undefined, undefined, date);
       playNotificationChime();
       showToast('ဘိုကင်ကို ပယ်ဖျက်ပြီးပါပြီ');
       onRefresh();
@@ -539,7 +539,7 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
                           Reschedule
                         </button>
                         <button
-                          onClick={() => handleCancel(b.id)}
+                          onClick={() => handleCancel(b.id, b.date)}
                           disabled={cancellingId === b.id}
                           className="px-2 py-0.5 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] border border-rose-200 cursor-pointer font-medium"
                         >

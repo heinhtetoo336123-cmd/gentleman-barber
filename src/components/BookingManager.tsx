@@ -240,7 +240,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
     }
   };
 
-  const handleDeleteSingleBooking = async (id: string, code: string) => {
+  const handleDeleteSingleBooking = async (id: string, code: string, date?: string) => {
     if (!isSuperAdmin) {
       alert('သတိပေးချက်: Booking အဟောင်းများ ဖျက်ပစ်ခွင့်ကို SuperAdmin (ဆိုင်ပိုင်ရှင်) သာ လုပ်ဆောင်နိုင်ပါသည် (SuperAdmin permission required).');
       return;
@@ -250,12 +250,19 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
       return;
     }
     setUpdatingId(id);
+    // Optimistic UI updates so deleted record disappears immediately
+    setDateBookings(prev => prev ? prev.filter(b => b.id !== id) : null);
+    setPaginatedBookings(prev => prev.filter(b => b.id !== id));
+    if (editingBooking && editingBooking.id === id) {
+      setEditingBooking(null);
+    }
     try {
-      await api.deleteBooking(id);
+      await api.deleteBooking(id, date);
       onRefresh();
     } catch (e) {
       console.error(e);
       alert('Booking ဖျက်ရာတွင် အမှားဖြစ်ခဲ့ပါသည်');
+      onRefresh();
     } finally {
       setUpdatingId(null);
     }
@@ -267,11 +274,14 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
       return;
     }
     if (confirm('👑 [SuperAdmin Action]\nပြီးစီးသွားသော (Completed) နှင့် ပယ်ဖျက်ထားသော (Cancelled) Booking ရာဇဝင် အားလုံးကို အပြီးသတ် ဖျက်ပစ်ရန် သေချာပါသလား?')) {
+      setDateBookings(prev => prev ? prev.filter(b => b.status !== 'completed' && b.status !== 'cancelled') : null);
+      setPaginatedBookings(prev => prev.filter(b => b.status !== 'completed' && b.status !== 'cancelled'));
       try {
         await api.clearBookingHistory(true);
         onRefresh();
       } catch (e) {
         console.error(e);
+        onRefresh();
       }
     }
   };
@@ -508,7 +518,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => handleDeleteSingleBooking(b.id, b.bookingCode)}
+                          onClick={() => handleDeleteSingleBooking(b.id, b.bookingCode, b.date)}
                           disabled={updatingId === b.id}
                           className="p-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer transition-colors"
                           title="Delete booking"
@@ -1108,7 +1118,7 @@ export const BookingManager: React.FC<BookingManagerProps> = ({
               <div className="flex items-center justify-between pt-3 border-t border-stone-200">
                 <button
                   type="button"
-                  onClick={() => handleDeleteSingleBooking(editingBooking.id, editingBooking.bookingCode)}
+                  onClick={() => handleDeleteSingleBooking(editingBooking.id, editingBooking.bookingCode, editingBooking.date)}
                   className="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200 flex items-center space-x-1 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

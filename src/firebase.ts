@@ -1,1 +1,1 @@
-export { db, defaultDb, legacyDb, auth, storage, app } from './lib/firebase';
+export { db, auth, storage, app } from './lib/firebase';

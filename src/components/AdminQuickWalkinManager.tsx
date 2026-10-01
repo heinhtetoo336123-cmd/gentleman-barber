@@ -479,7 +479,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
 
     // 2. Background Firestore delete (Strictly 1 single write: deleteDoc)
     try {
-      await api.deleteBooking(targetId);
+      await api.deleteBooking(targetId, targetBooking.date);
       onRefresh();
     } catch (err: any) {
       // Revert if background delete fails
@@ -497,7 +497,7 @@ export const AdminQuickWalkinManager: React.FC<AdminQuickWalkinManagerProps> = (
   const handleQuickStatusChange = async (bookingId: string, newStatus: BookingStatus) => {
     setLoading(true);
     try {
-      await api.updateBookingStatus(bookingId, newStatus);
+      await api.updateBookingStatus(bookingId, newStatus, undefined, undefined, undefined, undefined, activeBookingDetail?.date);
       if (activeBookingDetail && activeBookingDetail.id === bookingId) {
         setActiveBookingDetail({ ...activeBookingDetail, status: newStatus });
       }
