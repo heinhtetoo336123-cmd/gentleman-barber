@@ -36,7 +36,9 @@ import {
   Check,
   X,
   ShoppingBag,
-  TrendingDown
+  TrendingDown,
+  ShieldAlert,
+  Settings
 } from 'lucide-react';
 import { Service, Designer, Booking, AppStats, PaymentSettings, UserProfile } from '../types';
 import { Language, translations } from '../data/i18n';
@@ -66,6 +68,7 @@ import { RepairDatabaseModal } from './RepairDatabaseModal';
 import { SuperAdminHome } from './SuperAdminHome';
 import { SuperAdminReportsManager } from './SuperAdminReportsManager';
 import { AdminServiceBarberMatrixTable } from './AdminServiceBarberMatrixTable';
+import { SuperAdminRecordsManager } from './SuperAdminRecordsManager';
 
 export type AdminSection =
   | 'hub'
@@ -368,82 +371,129 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
   return (
     <div className="space-y-4">
       
-      {/* Prominent Admin Primary Command Bar: Walk-in, POS, Expenses */}
-      <div className="bg-white border-2 border-stone-300/80 rounded-2xl p-2.5 sm:p-3 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-          {/* 3 Primary Large Fixed Action Buttons: Walk-in, POS, Expenses */}
-          <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:space-x-2.5 w-full sm:w-auto">
-            {/* 1. Walk-in */}
+      {/* Prominent Command Bar: Superadmin dedicated navigation vs Admin Primary Command Bar */}
+      {role === 'superadmin' ? (
+        <div className="bg-stone-950 border border-stone-800 rounded-2xl p-2 sm:p-2.5 flex items-center justify-between shadow-md">
+          <div className="flex items-center space-x-2">
             <button
-              onClick={() => onSelectSection('walkins')}
-              className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
-                activeSection === 'walkins'
-                  ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
-                  : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+              onClick={() => onSelectSection('hub')}
+              className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
+                activeSection !== 'clients' && activeSection !== 'settings'
+                  ? 'bg-amber-500 text-stone-950 shadow-xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-900'
               }`}
             >
-              <Zap className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
-              <span className="tracking-wide">Walk-in</span>
+              <ShieldAlert className="w-4 h-4 text-stone-950" />
+              <span>👑 Records Manager</span>
             </button>
 
-            {/* 2. POS */}
             <button
-              onClick={() => onSelectSection('pos')}
-              className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
-                activeSection === 'pos'
-                  ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
-                  : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+              onClick={() => onSelectSection('clients')}
+              className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
+                activeSection === 'clients'
+                  ? 'bg-amber-500 text-stone-950 shadow-xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-900'
               }`}
             >
-              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 shrink-0" />
-              <span className="tracking-wide">POS</span>
+              <Users className="w-4 h-4 text-emerald-400" />
+              <span>Clients ({clients.length})</span>
             </button>
 
-            {/* 3. Expenses */}
             <button
-              onClick={() => onSelectSection('expenses')}
-              className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
-                activeSection === 'expenses'
-                  ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
-                  : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+              onClick={() => onSelectSection('settings')}
+              className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
+                activeSection === 'settings'
+                  ? 'bg-amber-500 text-stone-950 shadow-xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-900'
               }`}
             >
-              <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400 shrink-0" />
-              <span className="tracking-wide">Expenses</span>
+              <Settings className="w-4 h-4 text-stone-400" />
+              <span>Settings</span>
             </button>
           </div>
 
-          {/* Active module indicator if navigated into another section from Hub cards */}
-          {activeSection !== 'hub' && (
-            <div className="flex items-center justify-end sm:justify-start">
+          <div className="hidden sm:flex items-center space-x-2 px-3 text-[11px] font-mono text-stone-400">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>barber-db connected</span>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-white border-2 border-stone-300/80 rounded-2xl p-2.5 sm:p-3 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            {/* 3 Primary Large Fixed Action Buttons: Walk-in, POS, Expenses */}
+            <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:space-x-2.5 w-full sm:w-auto">
+              {/* 1. Walk-in */}
               <button
-                onClick={() => onSelectSection('hub')}
-                className="px-3 py-1.5 rounded-xl font-mono font-bold bg-stone-900 text-white text-xs flex items-center space-x-1.5 hover:bg-black transition-colors cursor-pointer border border-stone-800"
+                onClick={() => onSelectSection('walkins')}
+                className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  activeSection === 'walkins'
+                    ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
+                    : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+                }`}
               >
-                <span>🏠 Dashboard Hub</span>
-                {activeSection !== 'walkins' && activeSection !== 'pos' && activeSection !== 'expenses' && (
-                  <span className="text-emerald-400">• {currentInfo.name}</span>
-                )}
+                <Zap className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
+                <span className="tracking-wide">Walk-in</span>
+              </button>
+
+              {/* 2. POS */}
+              <button
+                onClick={() => onSelectSection('pos')}
+                className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  activeSection === 'pos'
+                    ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
+                    : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+                }`}
+              >
+                <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 shrink-0" />
+                <span className="tracking-wide">POS</span>
+              </button>
+
+              {/* 3. Expenses */}
+              <button
+                onClick={() => onSelectSection('expenses')}
+                className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
+                  activeSection === 'expenses'
+                    ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
+                    : 'bg-stone-100 text-stone-900 hover:text-black hover:bg-stone-200/90 border-2 border-stone-200'
+                }`}
+              >
+                <TrendingDown className="w-4 h-4 sm:w-5 sm:h-5 text-rose-400 shrink-0" />
+                <span className="tracking-wide">Expenses</span>
               </button>
             </div>
-          )}
+
+            {/* Active module indicator if navigated into another section from Hub cards */}
+            {activeSection !== 'hub' && (
+              <div className="flex items-center justify-end sm:justify-start">
+                <button
+                  onClick={() => onSelectSection('hub')}
+                  className="px-3 py-1.5 rounded-xl font-mono font-bold bg-stone-900 text-white text-xs flex items-center space-x-1.5 hover:bg-black transition-colors cursor-pointer border border-stone-800"
+                >
+                  <span>🏠 Dashboard Hub</span>
+                  {activeSection !== 'walkins' && activeSection !== 'pos' && activeSection !== 'expenses' && (
+                    <span className="text-emerald-400">• {currentInfo.name}</span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* VIEW: 1. OVERVIEW DASHBOARD HUB */}
       {activeSection === 'hub' && (
         <div className="space-y-6">
           
-          {/* SUPERADMIN DEDICATED HOME: AUDIT LOG, EXECUTIVE HIGHLIGHTS & REPORT SHORTCUTS */}
+          {/* SUPERADMIN DEDICATED HOME: DEDICATED BOOKING & WLK RECORDS MANAGER */}
           {role === 'superadmin' ? (
-            <SuperAdminHome
+            <SuperAdminRecordsManager
               bookings={bookings}
               designers={designers}
               services={services}
               clients={clients}
-              onNavigateSection={(sec) => onSelectSection(sec as AdminSection)}
               onRefresh={onRefresh}
               lang={lang}
+              onNavigateToClients={() => onSelectSection('clients')}
             />
           ) : (
             <>
@@ -563,111 +613,131 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
         <div className="space-y-4">
           {/* Sub Tab Content with localized ErrorBoundary resilience */}
           <ErrorBoundary fallbackTitle="Admin Sub-Module Error" onReset={onRefresh}>
-            {activeSection === 'reports' && (
-              <SuperAdminReportsManager
-                bookings={bookings}
-                designers={designers}
-                services={services}
-                clients={clients}
-                settings={shopSettings || undefined}
-                lang={lang}
-              />
-            )}
+            {role === 'superadmin' ? (
+              activeSection === 'clients' ? (
+                <ClientManager designers={designers} bookings={bookings} clients={clients} role={role} />
+              ) : activeSection === 'settings' ? (
+                <PaymentSettingsManager />
+              ) : (
+                <SuperAdminRecordsManager
+                  bookings={bookings}
+                  designers={designers}
+                  services={services}
+                  clients={clients}
+                  onRefresh={onRefresh}
+                  lang={lang}
+                  onNavigateToClients={() => onSelectSection('clients')}
+                />
+              )
+            ) : (
+              <>
+                {activeSection === 'reports' && (
+                  <SuperAdminReportsManager
+                    bookings={bookings}
+                    designers={designers}
+                    services={services}
+                    clients={clients}
+                    settings={shopSettings || undefined}
+                    lang={lang}
+                  />
+                )}
 
-            {activeSection === 'walkins' && (
-              <AdminQuickWalkinManager
-                designers={designers}
-                services={services}
-                bookings={bookings}
-                clients={clients}
-                onRefresh={onRefresh}
-                lang={lang}
-              />
-            )}
+                {activeSection === 'walkins' && (
+                  <AdminQuickWalkinManager
+                    designers={designers}
+                    services={services}
+                    bookings={bookings}
+                    clients={clients}
+                    onRefresh={onRefresh}
+                    lang={lang}
+                  />
+                )}
 
-            {activeSection === 'pos' && (
-              <RetailSalesSection
-                designers={designers}
-                lang={lang}
-              />
-            )}
+                {activeSection === 'pos' && (
+                  <RetailSalesSection
+                    designers={designers}
+                    lang={lang}
+                  />
+                )}
 
-            {activeSection === 'expenses' && (
-              <DailyExpensesSection
-                lang={lang}
-              />
-            )}
+                {activeSection === 'expenses' && (
+                  <DailyExpensesSection
+                    lang={lang}
+                  />
+                )}
 
-            {activeSection === 'settlement' && (
-              <DailySettlementReport
-                bookings={bookings}
-                designers={designers}
-                services={services}
-                onRefresh={onRefresh}
-                role={role}
-                initialTab="overview"
-              />
-            )}
+                {activeSection === 'settlement' && (
+                  <DailySettlementReport
+                    bookings={bookings}
+                    designers={designers}
+                    services={services}
+                    onRefresh={onRefresh}
+                    role={role}
+                    initialTab="overview"
+                  />
+                )}
 
-            {activeSection === 'services' && (
-              <ServiceCatalogManager
-                services={services}
-                onRefresh={onRefresh}
-                initialEditService={serviceToEdit}
-                onClearInitialEditService={onClearServiceToEdit}
-              />
-            )}
+                {activeSection === 'services' && (
+                  <ServiceCatalogManager
+                    services={services}
+                    onRefresh={onRefresh}
+                    initialEditService={serviceToEdit}
+                    onClearInitialEditService={onClearServiceToEdit}
+                  />
+                )}
 
-            {activeSection === 'designers' && (
-              <StaffOperationsManager
-                designers={designers}
-                bookings={bookings}
-                onRefresh={onRefresh}
-                role={role}
-              />
-            )}
+                {activeSection === 'designers' && (
+                  <StaffOperationsManager
+                    designers={designers}
+                    bookings={bookings}
+                    onRefresh={onRefresh}
+                    role={role}
+                  />
+                )}
 
-            {activeSection === 'accounts' && (
-              <AccountControlManager designers={designers} onRefresh={onRefresh} role={role} />
-            )}
+                {activeSection === 'accounts' && (
+                  <AccountControlManager designers={designers} onRefresh={onRefresh} role={role} />
+                )}
 
-            {activeSection === 'staff-portal' && (
-              <BarberStaffPortal designers={designers} bookings={bookings} onRefresh={onRefresh} />
-            )}
+                {activeSection === 'staff-portal' && (
+                  <BarberStaffPortal designers={designers} bookings={bookings} onRefresh={onRefresh} />
+                )}
 
-            {activeSection === 'clients' && (
-              <ClientManager designers={designers} bookings={bookings} clients={clients} role={role} />
-            )}
+                {activeSection === 'clients' && (
+                  <ClientManager designers={designers} bookings={bookings} clients={clients} role={role} />
+                )}
 
-            {activeSection === 'promos' && (
-              <PromoManager lang={lang} />
-            )}
+                {activeSection === 'promos' && (
+                  <PromoManager lang={lang} />
+                )}
 
-            {activeSection === 'database' && (
-              <DatabaseStoreManager onRefreshAll={onRefresh} />
-            )}
+                {activeSection === 'database' && (
+                  <DatabaseStoreManager onRefreshAll={onRefresh} />
+                )}
 
-            {activeSection === 'bookings' && (
-              <BookingManager
-                bookings={bookings}
-                designers={designers}
-                services={services}
-                onRefresh={onRefresh}
-                role={role}
-              />
-            )}
+                {activeSection === 'bookings' && (
+                  <BookingManager
+                    bookings={bookings}
+                    designers={designers}
+                    services={services}
+                    onRefresh={onRefresh}
+                    role={role}
+                  />
+                )}
 
-            {activeSection === 'settings' && (
-              <PaymentSettingsManager />
-            )}
+                {activeSection === 'settings' && (
+                  <PaymentSettingsManager />
+                )}
 
-            {activeSection === 'stats' && (
-              <AdminStatsTab
-                stats={stats}
-                bookings={bookings}
-                designers={designers}
-                services={services}
-              />
+                {activeSection === 'stats' && (
+                  <AdminStatsTab
+                    stats={stats}
+                    bookings={bookings}
+                    designers={designers}
+                    services={services}
+                  />
+                )}
+              </>
             )}
           </ErrorBoundary>
         </div>

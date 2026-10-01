@@ -1413,6 +1413,28 @@ export const api = {
   },
 
   /**
+   * Superadmin & Historical Records Loader:
+   * Retrieves all bookings from barber-db (either from days/{date} if date specified,
+   * or querying the full bookings collection up to limitCount).
+   */
+  async getAllBookings(options?: { date?: string; limitCount?: number }): Promise<Booking[]> {
+    if (options?.date) {
+      return this.getBookings({ date: options.date });
+    }
+    try {
+      const q = query(collection(db, 'bookings'), limit(options?.limitCount || 500));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const list = snap.docs.map(parseBookingDoc);
+        return sortBookingsMostRecentFirst(list);
+      }
+    } catch (e) {
+      console.warn('getAllBookings fallback:', e);
+    }
+    return getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+  },
+
+  /**
    * Dedicated Admin Dataset Loader:
    * Safely loads the initial operational bookings with limit(20) to prevent collection read spikes.
    * Caches locally so subsequent views are 0 cloud reads.
@@ -2832,12 +2854,8 @@ export const api = {
   // --- Clients & Member Levels API ---
   async getClients(): Promise<UserProfile[]> {
     const deletedIds = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
-    const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []).filter(c => !deletedIds.has(c.id));
-    if (local.length > 0 || shouldThrottleFirestoreFetch('clients')) {
-      return local;
-    }
     try {
-      const snap = await getDocs(query(collection(db, 'clients'), limit(20)));
+      const snap = await getDocs(query(collection(db, 'clients'), limit(500)));
       if (!snap.empty) {
         const list = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as UserProfile))
@@ -2849,7 +2867,8 @@ export const api = {
     } catch (e) {
       console.warn('Firestore getClients fallback:', e);
     }
-    return [];
+    const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []).filter(c => !deletedIds.has(c.id));
+    return local;
   },
 
   async purgeOldClientsAndNotifications(): Promise<{ success: boolean; message: string }> {
@@ -3113,7 +3132,7 @@ export const api = {
 
     // 2. Shared Firestore listener
     const releaseListener = retainSharedListener('clients', () => {
-      const q = query(collection(db, 'clients'), limit(150));
+      const q = query(collection(db, 'clients'), limit(500));
       return onSnapshot(
         q,
         (snap) => {
