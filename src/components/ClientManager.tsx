@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, Designer, Booking } from '../types';
-import { api } from '../api/client';
+import { api, mergeAndDeduplicateClients } from '../api/client';
 import { formatPrice } from '../utils/formatters';
 import { getBurmeseStatusLabel } from '../utils/burmeseTranslators';
 import {
@@ -57,13 +57,13 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
 }) => {
   const isSuperAdmin = role === 'superadmin';
   const [activeTab, setActiveTab] = useState<ClientViewTab>('clients');
-  const [clients, setClients] = useState<UserProfile[]>(propClients || []);
+  const [clients, setClients] = useState<UserProfile[]>(() => mergeAndDeduplicateClients(propClients || []));
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedTierFilter, setSelectedTierFilter] = useState('All');
 
   useEffect(() => {
     if (propClients && propClients.length > 0) {
-      setClients(propClients);
+      setClients(mergeAndDeduplicateClients(propClients));
     }
   }, [propClients]);
   
@@ -100,14 +100,14 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
   useEffect(() => {
     loadClients();
     const unsub = api.subscribeToClients((updatedClients) => {
-      setClients(updatedClients);
+      setClients(mergeAndDeduplicateClients(updatedClients || []));
     });
     return () => unsub();
   }, []);
 
   const loadClients = async () => {
     const data = await api.getClients();
-    setClients(data || []);
+    setClients(mergeAndDeduplicateClients(data || []));
   };
 
   const handleOpenEdit = (client: UserProfile) => {

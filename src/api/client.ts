@@ -1,4 +1,4 @@
-import { UserRole, Service, Designer, Booking, BookingServiceItem, BookingRetailItem, NotificationItem, NotificationType, AppStats, BookingStatus, UserProfile, PromoCode, PaymentSettings, AuditLog, ShopExpense, ExpensePreset, RetailProduct, RetailSale, DayLedger, DayLedgerSummary, YearlyReport, MonthSummary } from '../types';
+import { UserRole, Service, Designer, Booking, BookingServiceItem, BookingRetailItem, NotificationItem, NotificationType, AppStats, BookingStatus, UserProfile, PromoCode, PaymentSettings, AuditLog, ShopExpense, ExpensePreset, RetailProduct, RetailSale, DayLedger, DayLedgerSummary, DesignerDaySummary, YearlyReport, MonthSummary } from '../types';
 import { db } from '../lib/firebase';
 import {
   collection,
@@ -409,33 +409,147 @@ export function calculateDayLedgerSummary(
   retailSales: RetailSale[],
   expenses: ShopExpense[]
 ): DayLedgerSummary {
-  const bookingsRevenue = (bookings || [])
-    .filter(b => b.status !== 'cancelled' && b.status !== 'held')
-    .reduce((sum, b) => {
-      const p = Number(
-        b.price ??
-        b.servicePrice ??
-        (b.servicesList && b.servicesList.length > 0
-          ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
-          : 0)
-      );
-      const discount = Number(b.discountAmount || 0);
-      return sum + Math.max(0, p - discount);
-    }, 0);
+  const activeBookings = (bookings || []).filter(b => b.status !== 'cancelled' && b.status !== 'held');
+
+  const designersBreakdown: Record<string, DesignerDaySummary> = {};
+  const servicesBreakdown: Record<string, { count: number; revenue: number }> = {};
+  const paymentsBreakdown = { cash: 0, kpay: 0, wave: 0, other: 0 };
+
+  let bookingsRevenue = 0;
+
+  activeBookings.forEach((b) => {
+    const p = Number(
+      b.price ??
+      b.servicePrice ??
+      (b.servicesList && b.servicesList.length > 0
+        ? b.servicesList.reduce((acc, s) => acc + (Number(s.servicePrice) || 0), 0)
+        : 0)
+    );
+    const discount = Number(b.discountAmount || 0);
+    const finalPrice = Math.max(0, p - discount);
+    bookingsRevenue += finalPrice;
+
+    // Commission calculation
+    const commRate = Number((b as any).commissionRate ?? 0);
+    const commissionEarned = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
+      ? Number(b.commissionAmount)
+      : (commRate > 0 ? Math.round((finalPrice * commRate) / 100) : 0);
+
+    // Designer breakdown
+    const dName = (b.designerName || 'Unassigned').trim();
+    if (!designersBreakdown[dName]) {
+      designersBreakdown[dName] = { totalJobs: 0, totalValue: 0, commissionEarned: 0 };
+    }
+    designersBreakdown[dName].totalJobs += 1;
+    designersBreakdown[dName].totalValue += finalPrice;
+    designersBreakdown[dName].commissionEarned += commissionEarned;
+
+    // Service breakdown
+    const sName = (b.serviceName || 'Custom Service').trim();
+    if (!servicesBreakdown[sName]) {
+      servicesBreakdown[sName] = { count: 0, revenue: 0 };
+    }
+    servicesBreakdown[sName].count += 1;
+    servicesBreakdown[sName].revenue += finalPrice;
+
+    // Payment method breakdown
+    const payMethod = (b.paymentMethod || 'cash').toLowerCase();
+    if (payMethod === 'cash') {
+      paymentsBreakdown.cash += finalPrice;
+    } else if (payMethod.includes('kpay')) {
+      paymentsBreakdown.kpay += finalPrice;
+    } else if (payMethod.includes('wave')) {
+      paymentsBreakdown.wave += finalPrice;
+    } else {
+      paymentsBreakdown.other += finalPrice;
+    }
+  });
 
   const retailRevenue = (retailSales || []).reduce((sum, r) => sum + (Number(r.totalPrice) || 0), 0);
   const totalRevenue = bookingsRevenue + retailRevenue;
 
   const totalExpenses = (expenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
   const netProfit = totalRevenue - totalExpenses;
-  const totalBookings = (bookings || []).filter(b => b.status !== 'cancelled' && b.status !== 'held').length;
+  const totalBookings = activeBookings.length;
 
   return {
     totalRevenue,
     totalExpenses,
     netProfit,
     totalBookings,
+    designers: designersBreakdown,
+    services: servicesBreakdown,
+    payments: paymentsBreakdown,
   };
+}
+
+export function mergeAndDeduplicateClients(rawClients: UserProfile[]): UserProfile[] {
+  if (!Array.isArray(rawClients) || rawClients.length === 0) return [];
+  
+  const tierWeight: Record<string, number> = {
+    platinum: 4,
+    gold: 3,
+    silver: 2,
+    bronze: 1,
+    member: 0,
+  };
+
+  const map = new Map<string, UserProfile>();
+
+  for (const client of rawClients) {
+    if (!client) continue;
+    const rawPhone = (client.phone || '').trim();
+    const normPhone = normalizePhoneNumber(rawPhone);
+    const key = (normPhone && normPhone !== '0000000000') ? normPhone : (client.id || Math.random().toString());
+
+    if (!map.has(key)) {
+      map.set(key, { ...client });
+    } else {
+      const existing = map.get(key)!;
+      const exAny = existing as any;
+      const clAny = client as any;
+      
+      const existingTime = new Date(existing.lastActiveAt || exAny.updatedAt || exAny.createdAt || existing.joinedDate || 0).getTime();
+      const newTime = new Date(client.lastActiveAt || clAny.updatedAt || clAny.createdAt || client.joinedDate || 0).getTime();
+      const isNewer = newTime >= existingTime;
+
+      // c) Always update Display Name with the most recent sign-in / latest updated name
+      const latestName = isNewer ? (client.name || existing.name) : (existing.name || client.name);
+
+      // b) Retain profile photos, accumulated points, member tiers, and complete visit/booking histories
+      const avatarUrl = client.avatarUrl || clAny.photoURL || existing.avatarUrl || exAny.photoURL || '';
+      const points = Math.max(Number(existing.points || 0), Number(client.points || 0));
+      const totalPoints = (Number(exAny.totalPoints || 0) + Number(clAny.totalPoints || 0)) || points;
+
+      const existingTier = (existing.memberTier || 'Bronze').toLowerCase();
+      const clientTier = (client.memberTier || 'Bronze').toLowerCase();
+      const rawBestTier = (tierWeight[clientTier] || 0) > (tierWeight[existingTier] || 0) ? (client.memberTier || 'Bronze') : (existing.memberTier || 'Bronze');
+      const bestTier: 'Bronze' | 'Silver' | 'Gold' | 'VIP' = (['Bronze', 'Silver', 'Gold', 'VIP'].includes(rawBestTier) ? rawBestTier : 'Bronze') as any;
+
+      const totalVisits = (Number(exAny.totalVisits || 0) + Number(clAny.totalVisits || 0)) || (Number(exAny.visitCount || 0) + Number(clAny.visitCount || 0)) || 0;
+      const totalSpent = (Number(exAny.totalSpent || 0) + Number(clAny.totalSpent || 0)) || 0;
+
+      const email = client.email || existing.email || '';
+      const notes = [existing.notes, client.notes].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' | ');
+
+      map.set(key, {
+        ...existing,
+        id: isNewer ? (client.id || existing.id) : (existing.id || client.id),
+        name: latestName,
+        phone: client.phone || existing.phone,
+        avatarUrl,
+        memberTier: bestTier,
+        points,
+        email,
+        notes,
+        preferredBarberId: client.preferredBarberId || existing.preferredBarberId,
+        preferredBarberName: client.preferredBarberName || existing.preferredBarberName,
+        lastActiveAt: isNewer ? (client.lastActiveAt || existing.lastActiveAt) : (existing.lastActiveAt || client.lastActiveAt),
+      });
+    }
+  }
+
+  return Array.from(map.values());
 }
 
 export function createEmptyYearlyReport(year: string): YearlyReport {
@@ -2857,9 +2971,10 @@ export const api = {
     try {
       const snap = await getDocs(query(collection(db, 'clients'), limit(500)));
       if (!snap.empty) {
-        const list = snap.docs
+        const rawList = snap.docs
           .map(d => ({ id: d.id, ...d.data() } as UserProfile))
           .filter(c => !deletedIds.has(c.id));
+        const list = mergeAndDeduplicateClients(rawList);
         setLocalData(LOCAL_CLIENTS_KEY, list);
         notifyLocalSubscribers('clients', list);
         return list;
@@ -2868,7 +2983,7 @@ export const api = {
       console.warn('Firestore getClients fallback:', e);
     }
     const local = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []).filter(c => !deletedIds.has(c.id));
-    return local;
+    return mergeAndDeduplicateClients(local);
   },
 
   async purgeOldClientsAndNotifications(): Promise<{ success: boolean; message: string }> {
@@ -3127,7 +3242,7 @@ export const api = {
     const deletedIds = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
     const cached = getLocalData<UserProfile[]>(LOCAL_CLIENTS_KEY, []);
     if (cached && cached.length > 0) {
-      onUpdate(cached.filter(c => !deletedIds.has(c.id)));
+      onUpdate(mergeAndDeduplicateClients(cached.filter(c => !deletedIds.has(c.id))));
     }
 
     // 2. Shared Firestore listener
@@ -3138,9 +3253,10 @@ export const api = {
         (snap) => {
           if (snap.metadata.hasPendingWrites) return;
           const currentDeleted = getDeletedIds(LOCAL_DELETED_CLIENTS_KEY);
-          const list = snap.docs
+          const rawList = snap.docs
             .map(d => ({ id: d.id, ...d.data() } as UserProfile))
             .filter(c => !currentDeleted.has(c.id));
+          const list = mergeAndDeduplicateClients(rawList);
           setLocalData(LOCAL_CLIENTS_KEY, list);
           notifyLocalSubscribers('clients', list);
         },

@@ -21,6 +21,7 @@ import { BarberStaffPortal } from './components/BarberStaffPortal';
 import { AppUpdateNotifier } from './components/AppUpdateNotifier';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RepairDatabaseModal } from './components/RepairDatabaseModal';
+import { ExecutiveSuperAdminPortal } from './components/ExecutiveSuperAdminPortal';
 import { motion, AnimatePresence } from 'motion/react';
 
 import {
@@ -217,9 +218,9 @@ export default function App() {
     };
   }, []);
 
-  // Subscribe to clients list ONLY when authenticated as Admin or SuperAdmin (Saves 150 reads per client visitor)
+  // Subscribe to clients list ONLY when authenticated as Admin (Saves 150 reads per client visitor)
   useEffect(() => {
-    if (role === 'admin' || role === 'superadmin') {
+    if (role === 'admin') {
       const unsubClients = api.subscribeToClients((updatedClients) => {
         setClients(updatedClients);
       });
@@ -483,11 +484,11 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen bg-[#FAFAFA] text-[#18181B] font-sans pb-20 sm:pb-8 flex flex-col ${lang === 'my' ? 'burmese-font' : ''}`}>
+    <div className={`min-h-screen bg-[#FAFAFA] text-[#18181B] font-sans ${role === 'superadmin' ? 'pb-6' : 'pb-20 sm:pb-8'} flex flex-col ${lang === 'my' ? 'burmese-font' : ''}`}>
       <AppUpdateNotifier lang={lang} />
       
-      {/* Top Navigation Header (Only shown for customer and admin; hidden for barber who has dedicated bottom dock) */}
-      {role !== 'barber' && (
+      {/* Top Navigation Header (Only shown for customer and admin; hidden for barber and superadmin) */}
+      {role !== 'barber' && role !== 'superadmin' && (
         <Header
           role={role}
           lang={lang}
@@ -508,7 +509,7 @@ export default function App() {
       {/* Main Container with safe area and header offset */}
       <main
         className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6 flex-1 w-full space-y-6 ${
-          role !== 'barber' ? 'main-content-top-offset' : 'pt-safe'
+          role === 'superadmin' ? 'pt-4 sm:pt-6' : role !== 'barber' ? 'main-content-top-offset' : 'pt-safe'
         }`}
       >
         
@@ -680,8 +681,8 @@ export default function App() {
           </>
         )}
 
-        {/* ROLE 2: ADMIN & SUPERADMIN DASHBOARD */}
-        {(role === 'admin' || role === 'superadmin') && (
+        {/* ROLE 2: ADMIN DASHBOARD */}
+        {role === 'admin' && (
           <>
             {activeTab === 'notifications' ? (
               <NotificationsFeed
@@ -719,6 +720,16 @@ export default function App() {
           </>
         )}
 
+        {/* ROLE 2.5: DEDICATED EXECUTIVE SUPERADMIN HUB */}
+        {role === 'superadmin' && (
+          <ExecutiveSuperAdminPortal
+            lang={lang}
+            onLogout={handleSwitchPortal}
+            designers={designers}
+            services={services}
+          />
+        )}
+
         {/* ROLE 3: BARBER STAFF PORTAL */}
         {role === 'barber' && (
           <BarberStaffPortal
@@ -744,28 +755,32 @@ export default function App() {
 
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-[#E4E4E7] bg-[#FFFFFF] py-6 text-center text-xs text-[#71717A] mt-auto">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center space-x-2">
-            <span className="font-black text-[#18181B] font-sans uppercase tracking-wider">{shopSettings?.shopName || 'GENTLEMAN'}</span>
-            <span className="text-[#059669] font-semibold">— {shopSettings?.tagline || 'Barber & Grooming Lounge'}</span>
+      {/* Footer (hidden for barber and superadmin) */}
+      {role !== 'barber' && role !== 'superadmin' && (
+        <footer className="border-t border-[#E4E4E7] bg-[#FFFFFF] py-6 text-center text-xs text-[#71717A] mt-auto">
+          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center space-x-2">
+              <span className="font-black text-[#18181B] font-sans uppercase tracking-wider">{shopSettings?.shopName || 'GENTLEMAN'}</span>
+              <span className="text-[#059669] font-semibold">— {shopSettings?.tagline || 'Barber & Grooming Lounge'}</span>
+            </div>
+            <p className="font-sans text-[#71717A]">© {new Date().getFullYear()} {shopSettings?.shopName || 'GENTLEMAN'}.</p>
           </div>
-          <p className="font-sans text-[#71717A]">© {new Date().getFullYear()} {shopSettings?.shopName || 'GENTLEMAN'}.</p>
-        </div>
-      </footer>
+        </footer>
+      )}
 
-      {/* Mobile Bottom Navigation Bar */}
-      <BottomNav
-        activeTab={activeTab}
-        setActiveTab={handleTabChange}
-        role={role}
-        lang={lang}
-        pendingBookingsCount={pendingRequestsCount}
-        unreadNotifsCount={unreadNotifsCount}
-        onOpenNotifications={() => setIsNotifOpen(true)}
-        onOpenProfile={() => setIsUserProfileOpen(true)}
-      />
+      {/* Mobile Bottom Navigation Bar (Completely hidden/unmounted for Superadmin) */}
+      {role !== 'superadmin' && (
+        <BottomNav
+          activeTab={activeTab}
+          setActiveTab={handleTabChange}
+          role={role}
+          lang={lang}
+          pendingBookingsCount={pendingRequestsCount}
+          unreadNotifsCount={unreadNotifsCount}
+          onOpenNotifications={() => setIsNotifOpen(true)}
+          onOpenProfile={() => setIsUserProfileOpen(true)}
+        />
+      )}
 
       {/* User Profile Modal */}
       <UserProfileModal

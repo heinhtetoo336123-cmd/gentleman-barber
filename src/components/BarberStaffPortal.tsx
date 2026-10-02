@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Designer, Booking, NotificationItem } from '../types';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Designer, Booking, NotificationItem, DayLedger } from '../types';
 import { Language } from '../data/i18n';
 import { formatPrice, sortBookingsMostRecentFirst } from '../utils/formatters';
+import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, documentId } from 'firebase/firestore';
 import {
   isNotificationForBarber,
   getClearedNotificationIds,
@@ -251,6 +253,143 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
       return false;
     });
   }, [liveBookings, activeDesigner]);
+
+  // =========================================================================
+  // MONTHLY PERFORMANCE & COMMISSION LEDGER STATE (LOW-READ ARCHITECTURE)
+  // =========================================================================
+  const [barberScheduleMode, setBarberScheduleMode] = useState<'today' | 'monthly'>('today');
+  const [barberSelectedMonth, setBarberSelectedMonth] = useState<string>(() => todayStr.slice(0, 7)); // YYYY-MM
+  const [monthlyLedgerDocs, setMonthlyLedgerDocs] = useState<Record<string, DayLedger>>({});
+  const [isMonthlyLoading, setIsMonthlyLoading] = useState<boolean>(false);
+  const [expandedLedgerDate, setExpandedLedgerDate] = useState<string | null>(null);
+  const barberMonthlyCache = useRef<Map<string, Record<string, DayLedger>>>(new Map());
+
+  // Load monthly ledger on demand with in-memory caching
+  const loadMonthlyLedger = useCallback(async (monthStr: string) => {
+    if (barberMonthlyCache.current.has(monthStr)) {
+      setMonthlyLedgerDocs(barberMonthlyCache.current.get(monthStr)!);
+      return;
+    }
+    setIsMonthlyLoading(true);
+    try {
+      const startDate = `${monthStr}-01`;
+      const endDate = `${monthStr}-31`;
+      const q = query(
+        collection(db, 'days'),
+        where(documentId(), '>=', startDate),
+        where(documentId(), '<=', endDate)
+      );
+      const snap = await getDocs(q);
+      const docsMap: Record<string, DayLedger> = {};
+      snap.docs.forEach((docSnap) => {
+        docsMap[docSnap.id] = { id: docSnap.id, ...docSnap.data() } as unknown as DayLedger;
+      });
+      barberMonthlyCache.current.set(monthStr, docsMap);
+      setMonthlyLedgerDocs(docsMap);
+    } catch (err) {
+      console.warn('Failed to load barber monthly ledger:', err);
+    } finally {
+      setIsMonthlyLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (barberScheduleMode === 'monthly') {
+      loadMonthlyLedger(barberSelectedMonth);
+    }
+  }, [barberScheduleMode, barberSelectedMonth, loadMonthlyLedger]);
+
+  // Available month selection options
+  const availableMonthOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [];
+    const now = new Date();
+    const currentY = now.getFullYear();
+    for (let year = currentY; year >= currentY - 1; year--) {
+      for (let month = 12; month >= 1; month--) {
+        const mStr = String(month).padStart(2, '0');
+        const val = `${year}-${mStr}`;
+        const d = new Date(year, month - 1, 1);
+        const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        options.push({ value: val, label });
+      }
+    }
+    return options;
+  }, []);
+
+  // Compute barber's daily rows for the selected month
+  const monthlyBarberDays = useMemo(() => {
+    if (!activeDesigner) return [];
+    const barberName = (activeDesigner.name || '').trim().toLowerCase();
+    const barberId = activeDesigner.id;
+    const daysList: Array<{
+      date: string;
+      completedCuts: number;
+      dailyTotal: number;
+      commission: number;
+      bookings: Booking[];
+    }> = [];
+
+    Object.entries(monthlyLedgerDocs).forEach(([dateStr, ledger]) => {
+      const designerSummary = ledger.summary?.designers;
+      let cuts = 0;
+      let totalVal = 0;
+      let comm = 0;
+
+      if (designerSummary) {
+        for (const [dKey, s] of Object.entries(designerSummary)) {
+          if (dKey.toLowerCase() === barberName || dKey === activeDesigner.name) {
+            cuts += s.totalJobs || 0;
+            totalVal += s.totalValue || 0;
+            comm += s.commissionEarned || 0;
+          }
+        }
+      }
+
+      const dayBookings = (ledger.bookings || []).filter((b) => {
+        const matchId = b.designerId === barberId;
+        const matchName = (b.designerName || '').trim().toLowerCase() === barberName;
+        return matchId || matchName;
+      });
+
+      if (cuts === 0 && dayBookings.length > 0) {
+        const completed = dayBookings.filter((b) => b.status === 'completed');
+        cuts = completed.length;
+        completed.forEach((b) => {
+          const p = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
+          totalVal += p;
+          const c = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
+            ? b.commissionAmount
+            : Math.round((p * (activeDesigner.commissionPercent ?? 50)) / 100);
+          comm += c;
+        });
+      }
+
+      if (cuts > 0 || dayBookings.length > 0) {
+        daysList.push({
+          date: dateStr,
+          completedCuts: cuts,
+          dailyTotal: totalVal,
+          commission: comm,
+          bookings: dayBookings,
+        });
+      }
+    });
+
+    return daysList.sort((a, b) => b.date.localeCompare(a.date));
+  }, [monthlyLedgerDocs, activeDesigner]);
+
+  // Sum monthly totals
+  const monthlyTotals = useMemo(() => {
+    return monthlyBarberDays.reduce(
+      (acc, day) => {
+        acc.totalCuts += day.completedCuts;
+        acc.totalValue += day.dailyTotal;
+        acc.totalCommission += day.commission;
+        return acc;
+      },
+      { totalCuts: 0, totalValue: 0, totalCommission: 0 }
+    );
+  }, [monthlyBarberDays]);
 
   // Timeline Bookings for Selected Date or Date Range with Channel Filter
   const timelineFilteredBookings = useMemo(() => {
@@ -704,11 +843,279 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
       <div>
         
         {/* ========================================================================= */}
-        {/* TAB 1: TIMELINE (DEFAULT SCREEN) WITH DATE RANGE & COMMISSION STATS       */}
+        {/* TAB 1: TIMELINE / MONTHLY PERFORMANCE LEDGER (BANK STATEMENT STYLE)       */}
         {/* ========================================================================= */}
         {activeTab === 'timeline' && (
           <div className="space-y-4">
-            
+
+            {/* Primary Mode Toggle: [ Today Schedule ] | [ 📅 Monthly Performance ] */}
+            <div className="bg-stone-900 border border-stone-800 rounded-2xl p-1.5 flex items-center justify-between shadow-xs">
+              <div className="grid grid-cols-2 gap-1.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setBarberScheduleMode('today')}
+                  className={`px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
+                    barberScheduleMode === 'today'
+                      ? 'bg-emerald-500 text-stone-950 font-black shadow-xs'
+                      : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{lang === 'my' ? '⏰ ယနေ့ အချိန်ဇယား (Schedule)' : '⏰ Today Schedule'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBarberScheduleMode('monthly')}
+                  className={`px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
+                    barberScheduleMode === 'monthly'
+                      ? 'bg-emerald-500 text-stone-950 font-black shadow-xs'
+                      : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                  }`}
+                >
+                  <CalendarDays className="w-3.5 h-3.5" />
+                  <span>{lang === 'my' ? '📅 လချုပ် စာရင်း & ကော်မရှင်' : '📅 Monthly Performance'}</span>
+                </button>
+              </div>
+
+              <span className="hidden sm:inline-block text-[11px] font-mono text-stone-400 px-3">
+                {activeDesigner?.name} • {commissionRate}% Comm
+              </span>
+            </div>
+
+            {/* ----------------------------------------------------------------- */}
+            {/* VIEW A: MONTHLY PERFORMANCE & COMMISSION LEDGER (QUOTA OPTIMIZED) */}
+            {/* ----------------------------------------------------------------- */}
+            {barberScheduleMode === 'monthly' ? (
+              <div className="space-y-4">
+                {/* Month Selector Header Card + Compact Chips */}
+                <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-5 shadow-2xs space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-stone-100 pb-3.5">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="w-9 h-9 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                        <Award className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-black text-stone-950 font-mono uppercase tracking-tight">
+                          {lang === 'my' ? 'လအလိုက် စွမ်းဆောင်ရည် & ကော်မရှင် စာရင်းချုပ်' : 'Monthly Performance & Commission Ledger'}
+                        </h3>
+                        <p className="text-xs text-stone-500 font-mono">
+                          {lang === 'my' ? 'ဘဏ်စာရင်းရှင်းတမ်းပုံစံ နေ့စဉ် ဖြတ်တောက်မှုနှင့် ကော်မရှင်' : 'Bank-statement style daily cuts & commission payout ledger'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Month Picker Dropdown */}
+                    <div className="flex items-center space-x-2">
+                      <select
+                        value={barberSelectedMonth}
+                        onChange={(e) => setBarberSelectedMonth(e.target.value)}
+                        className="bg-stone-50 border border-stone-300 text-stone-900 text-xs font-mono font-bold rounded-xl px-3 py-2 cursor-pointer focus:outline-hidden focus:border-emerald-600 shadow-2xs"
+                      >
+                        {availableMonthOptions.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label} ({opt.value})
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          barberMonthlyCache.current.delete(barberSelectedMonth);
+                          loadMonthlyLedger(barberSelectedMonth);
+                        }}
+                        className="p-2 bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl cursor-pointer transition-all active:scale-95"
+                        title="Reload Month"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isMonthlyLoading ? 'animate-spin text-emerald-600' : ''}`} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Compact High-Level Summary Chips */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {/* Chip 1: Total Heads Cut */}
+                    <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-3 space-y-0.5">
+                      <span className="text-[10px] font-mono text-stone-500 uppercase font-bold flex items-center space-x-1">
+                        <Scissors className="w-3 h-3 text-stone-600" />
+                        <span>{lang === 'my' ? 'စုစုပေါင်း ခေါင်းရေ' : 'Total Heads Cut'}</span>
+                      </span>
+                      <div className="text-lg sm:text-xl font-black text-stone-950 font-mono">
+                        {monthlyTotals.totalCuts} <span className="text-xs font-normal text-stone-500">{lang === 'my' ? 'ဦး' : 'Cuts'}</span>
+                      </div>
+                    </div>
+
+                    {/* Chip 2: Total Service Value */}
+                    <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-3 space-y-0.5">
+                      <span className="text-[10px] font-mono text-stone-500 uppercase font-bold flex items-center space-x-1">
+                        <DollarSign className="w-3 h-3 text-stone-600" />
+                        <span>{lang === 'my' ? 'စုစုပေါင်း ဝန်ဆောင်မှုတန်ဖိုး' : 'Total Service Value'}</span>
+                      </span>
+                      <div className="text-lg sm:text-xl font-black text-stone-900 font-mono">
+                        {formatPrice(monthlyTotals.totalValue)}
+                      </div>
+                    </div>
+
+                    {/* Chip 3: Total Barber Commission */}
+                    <div className="col-span-2 sm:col-span-1 bg-emerald-50 border border-emerald-300 rounded-2xl p-3 space-y-0.5">
+                      <span className="text-[10px] font-mono text-emerald-900 uppercase font-black flex items-center space-x-1">
+                        <Sparkles className="w-3 h-3 text-emerald-700" />
+                        <span>{lang === 'my' ? 'ရရှိမည့် စုစုပေါင်း ကော်မရှင်' : 'Total Commission'} ({commissionRate}%)</span>
+                      </span>
+                      <div className="text-lg sm:text-xl font-black text-emerald-950 font-mono">
+                        {formatPrice(monthlyTotals.totalCommission)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bank Statement Style Daily Rows Table */}
+                <div className="bg-white border border-stone-200 rounded-3xl overflow-hidden shadow-2xs font-mono">
+                  <div className="bg-stone-900 text-white px-4 py-3 text-xs font-bold flex items-center justify-between border-b border-stone-800">
+                    <div className="flex items-center space-x-2">
+                      <Calendar className="w-4 h-4 text-emerald-400" />
+                      <span>{lang === 'my' ? 'နေ့စဉ် ရှင်းတမ်း စာရင်း (Daily Ledger Rows)' : 'Daily Statement Rows'}</span>
+                    </div>
+                    <span className="text-[11px] text-stone-400">
+                      {monthlyBarberDays.length} {monthlyBarberDays.length === 1 ? 'day active' : 'days active'}
+                    </span>
+                  </div>
+
+                  {isMonthlyLoading ? (
+                    <div className="p-12 text-center text-stone-400 space-y-2">
+                      <RefreshCw className="w-6 h-6 animate-spin text-emerald-600 mx-auto" />
+                      <p className="text-xs">{lang === 'my' ? 'လချုပ် ဒေတာများ ဆွဲယူနေပါသည်...' : 'Loading monthly performance data...'}</p>
+                    </div>
+                  ) : monthlyBarberDays.length === 0 ? (
+                    <div className="p-12 text-center text-stone-400 space-y-2">
+                      <Scissors className="w-8 h-8 text-stone-300 mx-auto" />
+                      <p className="text-xs font-bold text-stone-600">
+                        {lang === 'my' ? 'ရွေးချယ်ထားသောလအတွက် ပြီးမြောက်ခဲ့သော ဝန်ဆောင်မှုမှတ်တမ်း မရှိသေးပါ' : 'No completed service records found for this month.'}
+                      </p>
+                      <p className="text-[11px] text-stone-400">
+                        {barberSelectedMonth}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-stone-100">
+                      {/* Column Header */}
+                      <div className="bg-stone-50 px-4 py-2.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-12 items-center">
+                        <span className="col-span-3 sm:col-span-3">Date</span>
+                        <span className="col-span-3 sm:col-span-3 text-center sm:text-left">Completed Cuts</span>
+                        <span className="col-span-3 sm:col-span-3 text-right">Daily Total</span>
+                        <span className="col-span-3 sm:col-span-3 text-right">Commission</span>
+                      </div>
+
+                      {/* Daily Rows */}
+                      {monthlyBarberDays.map((day) => {
+                        const isExpanded = expandedLedgerDate === day.date;
+                        const dateFormatted = (() => {
+                          try {
+                            const [y, m, d] = day.date.split('-');
+                            const obj = new Date(Number(y), Number(m) - 1, Number(d));
+                            return obj.toLocaleDateString('en-US', { day: '2-digit', month: 'short' });
+                          } catch {
+                            return day.date;
+                          }
+                        })();
+
+                        return (
+                          <div key={day.date} className="transition-colors">
+                            {/* Main Row */}
+                            <div
+                              onClick={() => setExpandedLedgerDate(isExpanded ? null : day.date)}
+                              className={`px-4 py-3 grid grid-cols-12 items-center text-xs cursor-pointer hover:bg-stone-50 transition-all ${
+                                isExpanded ? 'bg-emerald-50/40' : ''
+                              }`}
+                            >
+                              {/* Date */}
+                              <div className="col-span-3 sm:col-span-3 flex items-center space-x-1.5">
+                                <ChevronRight className={`w-3.5 h-3.5 text-stone-400 transition-transform ${isExpanded ? 'rotate-90 text-emerald-600' : ''}`} />
+                                <span className="font-bold text-stone-900">{dateFormatted}</span>
+                              </div>
+
+                              {/* Completed Cuts */}
+                              <div className="col-span-3 sm:col-span-3 text-center sm:text-left">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 text-stone-800 border border-stone-200">
+                                  {day.completedCuts} {day.completedCuts === 1 ? 'cut' : 'cuts'}
+                                </span>
+                              </div>
+
+                              {/* Daily Total */}
+                              <div className="col-span-3 sm:col-span-3 text-right font-medium text-stone-700">
+                                {formatPrice(day.dailyTotal)}
+                              </div>
+
+                              {/* Commission */}
+                              <div className="col-span-3 sm:col-span-3 text-right font-black text-emerald-700">
+                                {formatPrice(day.commission)}
+                              </div>
+                            </div>
+
+                            {/* Expanded Day Job List (Directly from in-memory cached day bookings) */}
+                            <AnimatePresence>
+                              {isExpanded && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  className="bg-stone-50/80 border-t border-b border-stone-200/80 px-4 py-3 space-y-2 overflow-hidden text-xs"
+                                >
+                                  <div className="flex items-center justify-between text-[11px] text-stone-500 font-bold border-b border-stone-200 pb-1.5">
+                                    <span>📋 {day.date} Job List ({day.bookings.length} jobs)</span>
+                                    <span>Click row to close</span>
+                                  </div>
+
+                                  <div className="divide-y divide-stone-200/60">
+                                    {day.bookings.map((b) => {
+                                      const isCompleted = b.status === 'completed';
+                                      const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
+                                      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
+                                        ? b.commissionAmount
+                                        : Math.round((finalPrice * commissionRate) / 100);
+
+                                      return (
+                                        <div key={b.id} className="py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px]">
+                                          <div className="flex items-center space-x-2">
+                                            <span className="font-bold text-stone-400 w-14 shrink-0">{b.timeSlot || '—'}</span>
+                                            <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                              b.isWalkin ? 'bg-amber-100 text-amber-900' : 'bg-blue-100 text-blue-900'
+                                            }`}>
+                                              {b.isWalkin ? 'WLK' : 'BOOK'}
+                                            </span>
+                                            <span className="font-bold text-stone-900">{b.customerName || 'Walk-in'}</span>
+                                            <span className="text-stone-500 hidden sm:inline">• {b.serviceName || 'Service'}</span>
+                                          </div>
+
+                                          <div className="flex items-center space-x-3 self-end sm:self-auto">
+                                            <span className="text-stone-600">{formatPrice(finalPrice)}</span>
+                                            <span className="font-bold text-emerald-700">+{formatPrice(isCompleted ? comm : 0)} Comm</span>
+                                            <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                              isCompleted ? 'bg-emerald-100 text-emerald-900' : 'bg-stone-200 text-stone-700'
+                                            }`}>
+                                              {b.status}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
+            {/* ----------------------------------------------------------------- */}
+            {/* VIEW B: TODAY & DATE RANGE SCHEDULE (EXISTING TIMELINE VIEW)       */}
+            {/* ----------------------------------------------------------------- */}
             {/* Filter & Date Range Header Card */}
             <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-5 shadow-2xs space-y-4">
               {/* Mode Toggle & Presets */}
@@ -1215,6 +1622,8 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                 </div>
               )}
             </div>
+            </>
+            )}
           </div>
         )}
 

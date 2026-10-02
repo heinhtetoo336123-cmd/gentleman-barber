@@ -5,6 +5,7 @@ import { getLocalTodayStr } from '../utils/timeSlots';
 import { api } from '../api/client';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { downloadCsvFile } from '../utils/exportHelpers';
 import {
   Calendar,
   Download,
@@ -21,6 +22,7 @@ import {
   TrendingUp,
   Sparkles,
   ChevronRight,
+  ChevronLeft,
   ShoppingBag,
   Receipt,
   Wallet,
@@ -30,7 +32,10 @@ import {
   Equal,
   CreditCard,
   DollarSign,
-  Loader2
+  Loader2,
+  X,
+  ExternalLink,
+  Trash2
 } from 'lucide-react';
 
 interface AdminServiceBarberMatrixTableProps {
@@ -63,6 +68,25 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     return api.getCachedBookings().filter((b) => b.date === todayStr);
   });
   const [isMatrixLoading, setIsMatrixLoading] = useState(false);
+  const [drilldownModal, setDrilldownModal] = useState<'services' | 'retail' | 'expenses' | 'drawer' | null>(null);
+
+  // Date Stepper (< and >)
+  const handleStepDate = (delta: number) => {
+    const dStart = new Date(startDate);
+    dStart.setDate(dStart.getDate() + delta);
+    const nextStartStr = dStart.toISOString().split('T')[0];
+
+    if (startDate === endDate) {
+      setStartDate(nextStartStr);
+      setEndDate(nextStartStr);
+    } else {
+      const dEnd = new Date(endDate);
+      dEnd.setDate(dEnd.getDate() + delta);
+      const nextEndStr = dEnd.toISOString().split('T')[0];
+      setStartDate(nextStartStr);
+      setEndDate(nextEndStr);
+    }
+  };
 
   // Sync today's bookings on initial load or bookings prop changes (0 cloud reads)
   useEffect(() => {
@@ -599,15 +623,21 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
 
     // 3. Shop Expenses (-)
     let expensesTotal = 0;
+    let expensesCash = 0;
     filteredExpenses.forEach((e) => {
-      expensesTotal += Number(e.amount) || 0;
+      const amt = Number(e.amount) || 0;
+      expensesTotal += amt;
+      const pMethod = ((e as any).paymentMethod || 'cash').toLowerCase();
+      if (pMethod === 'cash' || !pMethod) {
+        expensesCash += amt;
+      }
     });
 
     // 4. Net Value in Drawer (Barber commission is NOT deducted per user directive)
     const totalInflow = servicesTotal + retailTotal;
     const netValueInDrawer = totalInflow - expensesTotal;
     const totalCashInflow = servicesCash + retailCash;
-    const cashInDrawer = totalCashInflow - expensesTotal;
+    const cashInDrawer = totalCashInflow - expensesCash;
     const totalDigitalInflow = servicesDigital + retailDigital;
 
     return {
@@ -620,6 +650,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       retailTotal,
       retailCount,
       expensesTotal,
+      expensesCash,
       expensesCount: filteredExpenses.length,
       totalInflow,
       netValueInDrawer,
@@ -692,159 +723,115 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     return { totalAppointments, walkinCount, bookingCount, totalServiceValue, totalCommission };
   }, [stylistDetailedBookings, designers]);
 
-  // Comprehensive Export to CSV (Includes Matrix Summary & Detailed Stylist Breakdown)
-  const handleExportCSV = () => {
-    // 1. Matrix Summary Section
-    const matrixHeaders = [
-      'No.',
-      'Service Name',
-      'Price (MMK)',
-      ...activeDesigners.map((d) => `${d.name} (Jobs)`),
-      ...activeDesigners.map((d) => `${d.name} (Revenue MMK)`),
-      'Total Jobs',
-      'Total Revenue (MMK)'
-    ];
-
-    const matrixRows = displayedServices.map((s, idx) => {
-      let rowJobs = 0;
-      let rowRev = 0;
-      const dJobCounts = activeDesigners.map((d) => {
-        const cell = matrixData.get(`${s.id}___${d.id}`) || { count: 0, revenue: 0 };
-        rowJobs += cell.count;
-        return cell.count;
-      });
-      const dRevCounts = activeDesigners.map((d) => {
-        const cell = matrixData.get(`${s.id}___${d.id}`) || { count: 0, revenue: 0 };
-        rowRev += cell.revenue;
-        return cell.revenue;
-      });
-
-      return [
-        idx + 1,
-        `"${(s.name || '').replace(/"/g, '""')}"`,
-        s.price,
-        ...dJobCounts,
-        ...dRevCounts,
-        rowJobs,
-        rowRev
-      ];
-    });
-
-    const totalJobsPerDesigner = activeDesigners.map((d) => designerTotals[d.id]?.count || 0);
-    const totalRevPerDesigner = activeDesigners.map((d) => designerTotals[d.id]?.revenue || 0);
-    const matrixSummaryRow = [
-      'TOTAL',
-      '"Summary Matrix Total"',
-      '',
-      ...totalJobsPerDesigner,
-      ...totalRevPerDesigner,
-      grandTotal.totalCount,
-      grandTotal.totalRevenue
-    ];
-
-    // 2. Stylist Detailed Individual Appointments Section
-    const detailedHeaders = [
-      'No.',
-      'Stylist (Barber)',
-      'Date (ရက်စွဲ)',
-      'Time (အချိန်)',
-      'Services (ဝန်ဆောင်မှုများ)',
-      'Type (Walk-in / Booking)',
-      'Customer Name',
-      'Customer Phone',
-      'Service Value (MMK)',
-      'Commission (MMK)',
+  // Comprehensive Export to Excel/CSV with Unicode BOM (\uFEFF)
+  const handleExportExcel = () => {
+    const headers = [
+      'Date',
+      'Time',
+      'Type',
+      'Booking Code',
+      'Customer',
+      'Phone',
+      'Stylist',
+      'Service',
       'Payment Method',
+      'Amount (MMK)',
+      'Commission (MMK)',
       'Status'
     ];
 
-    const detailedRows = stylistDetailedBookings.map((b, idx) => {
+    let totalAmountSum = 0;
+    let totalCommissionSum = 0;
+
+    const rows: (string | number | boolean | null | undefined)[][] = stylistDetailedBookings.map((b) => {
       const des = designers.find((d) => d.id === b.designerId);
-      const commRate = des?.commissionPercent ?? 50;
+      const commRate = des?.commissionPercent ?? (b.commissionRate || 50);
       const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
-      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount > 0
+      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
         ? b.commissionAmount
         : Math.round((finalPrice * commRate) / 100);
+
+      if (b.status !== 'cancelled') {
+        totalAmountSum += finalPrice;
+        totalCommissionSum += comm;
+      }
 
       const servicesText = b.servicesList && b.servicesList.length > 0
         ? b.servicesList.map(s => s.serviceName).join(' + ')
         : b.serviceName;
 
       return [
-        idx + 1,
-        `"${(b.designerName || des?.name || 'Stylist').replace(/"/g, '""')}"`,
-        `"${b.date}"`,
-        `"${b.timeSlot}"`,
-        `"${(servicesText || '').replace(/"/g, '""')}"`,
+        b.date || startDate,
+        b.timeSlot || '—',
         b.isWalkin ? 'Walk-in' : 'Online Booking',
-        `"${(b.customerName || 'Walk-in Guest').replace(/"/g, '""')}"`,
-        `"${b.customerPhone || ''}"`,
+        b.bookingCode || b.id.slice(0, 8),
+        b.customerName || 'Walk-in Guest',
+        b.customerPhone || '',
+        b.designerName || des?.name || 'Stylist',
+        servicesText || 'Service',
+        b.paymentMethod || 'cash',
         finalPrice,
         comm,
-        b.paymentMethod || 'cash',
         b.status
       ];
     });
 
-    const detailedSummaryRow = [
-      'TOTAL',
-      'Selected Stylist Summary',
-      `"${periodLabel}"`,
+    // Summary Row at the bottom
+    rows.push([
+      'TOTAL SUMMARY',
       '',
-      `${stylistDetailedTotals.totalAppointments} jobs`,
-      `Walk-ins: ${stylistDetailedTotals.walkinCount} | Bookings: ${stylistDetailedTotals.bookingCount}`,
+      `${rows.length} records`,
       '',
       '',
-      stylistDetailedTotals.totalServiceValue,
-      stylistDetailedTotals.totalCommission,
       '',
-      ''
-    ];
+      '',
+      '',
+      '',
+      totalAmountSum,
+      totalCommissionSum,
+      'Completed Total'
+    ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [
-      `"REPORT: SERVICE & STYLIST PERFORMANCE MATRIX (${periodLabel})"`,
-      matrixHeaders.join(','),
-      ...matrixRows.map((r) => r.join(',')),
-      matrixSummaryRow.join(','),
-      '',
-      '',
-      `"REPORT: INDIVIDUAL STYLIST PERFORMANCE & COMMISSION BREAKDOWN (${periodLabel})"`,
-      detailedHeaders.join(','),
-      ...detailedRows.map((r) => r.join(',')),
-      detailedSummaryRow.join(',')
-    ].join('\n');
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Stylist_Performance_Report_${startDate === endDate ? startDate : (startDate + '_to_' + endDate)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Print Table
-  const handlePrint = () => {
-    window.print();
+    const filename = `GENTLEMAN_Transactions_Report_${startDate === endDate ? startDate : (startDate + '_to_' + endDate)}`;
+    downloadCsvFile(headers, rows, filename, [5]); // column 5 is Phone to preserve leading 0
   };
 
   return (
     <div className="bg-white border border-stone-200 rounded-3xl p-3.5 sm:p-5 shadow-xs space-y-3.5 font-sans print:p-0 print:border-none print:shadow-none">
       
       {/* ========================================================================= */}
-      {/* TOP ULTRA-COMPACT DATE RANGE PICKER BAR                                   */}
+      {/* TOP ULTRA-COMPACT DATE RANGE PICKER BAR WITH STEPPERS & EXCEL EXPORT      */}
       {/* ========================================================================= */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2.5 print:hidden">
-        <div className="flex items-center space-x-2">
+        {/* Date Display with [<] and [>] steppers */}
+        <div className="flex items-center space-x-1.5">
+          <button
+            type="button"
+            onClick={() => handleStepDate(-1)}
+            className="p-1 rounded-lg border border-stone-200 bg-stone-50 hover:bg-stone-100 text-stone-700 cursor-pointer shadow-2xs transition-colors"
+            title="Previous Day"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
           <div className="w-6 h-6 rounded-lg bg-emerald-500 text-stone-950 flex items-center justify-center font-black text-xs shrink-0 shadow-2xs">
             <Calendar className="w-3.5 h-3.5" />
           </div>
           <span className="text-xs font-mono font-bold text-stone-800">
             {periodLabel}
           </span>
+
+          <button
+            type="button"
+            onClick={() => handleStepDate(1)}
+            className="p-1 rounded-lg border border-stone-200 bg-stone-50 hover:bg-stone-100 text-stone-700 cursor-pointer shadow-2xs transition-colors"
+            title="Next Day"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        {/* Compact Mini Date Inputs */}
+        {/* Compact Mini Date Inputs + Today Pill + Sleek Export Excel Button */}
         <div className="flex items-center flex-wrap gap-1.5">
           {isMatrixLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 shrink-0" />}
           <div className="flex items-center space-x-1 bg-stone-50 border border-stone-200 rounded-lg px-2 py-0.5 font-mono text-xs shadow-2xs">
@@ -876,20 +863,36 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
           >
             {lang === 'my' ? 'ယနေ့' : 'Today'}
           </button>
+
+          {/* Sleek Export Excel button positioned right beside Date Range inputs */}
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            className="px-2.5 py-1 bg-stone-900 hover:bg-black text-white text-[11px] font-mono font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-colors shadow-2xs shrink-0"
+            title="Export Excel with Unicode BOM"
+          >
+            <Download className="w-3 h-3 text-emerald-400" />
+            <span>Export Excel</span>
+          </button>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* FINANCIAL SUMMARY (CLEAN & SIMPLE)                                        */}
+      {/* FINANCIAL SUMMARY (CLEAN, SIMPLE & INTERACTIVE DRILL-DOWN)                */}
       {/* ========================================================================= */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
         {/* Metric 1: Cash+Digital Payment (services) */}
-        <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-3 sm:p-3.5 space-y-1">
+        <div
+          onClick={() => setDrilldownModal('services')}
+          className="bg-stone-50 hover:bg-stone-100/80 border border-stone-200/80 hover:border-stone-400 rounded-2xl p-3 sm:p-3.5 space-y-1 cursor-pointer transition-all active:scale-[0.99] group shadow-2xs"
+          title="Click to view Services financial breakdown"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-stone-500 uppercase tracking-wider font-mono">
+            <span className="text-[11px] font-bold text-stone-500 uppercase tracking-wider font-mono group-hover:text-stone-800 flex items-center gap-1">
               Cash+Digital (services)
+              <ExternalLink className="w-2.5 h-2.5 text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity" />
             </span>
-            <Scissors className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+            <Scissors className="w-3.5 h-3.5 text-stone-400 group-hover:text-stone-700 shrink-0" />
           </div>
           <div className="text-base sm:text-lg font-black text-stone-900 font-mono">
             {formatPrice(drawerFinancials.servicesTotal)}
@@ -902,12 +905,17 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
         </div>
 
         {/* Metric 2: RETAIL PRODUCT SALES */}
-        <div className="bg-stone-50 border border-stone-200/80 rounded-2xl p-3 sm:p-3.5 space-y-1">
+        <div
+          onClick={() => setDrilldownModal('retail')}
+          className="bg-stone-50 hover:bg-stone-100/80 border border-stone-200/80 hover:border-stone-400 rounded-2xl p-3 sm:p-3.5 space-y-1 cursor-pointer transition-all active:scale-[0.99] group shadow-2xs"
+          title="Click to view Retail Product Sales breakdown"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-stone-500 uppercase tracking-wider font-mono">
+            <span className="text-[11px] font-bold text-stone-500 uppercase tracking-wider font-mono group-hover:text-stone-800 flex items-center gap-1">
               RETAIL PRODUCT SALES
+              <ExternalLink className="w-2.5 h-2.5 text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity" />
             </span>
-            <ShoppingBag className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+            <ShoppingBag className="w-3.5 h-3.5 text-stone-400 group-hover:text-stone-700 shrink-0" />
           </div>
           <div className="text-base sm:text-lg font-black text-stone-900 font-mono">
             {formatPrice(drawerFinancials.retailTotal)}
@@ -920,26 +928,36 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
         </div>
 
         {/* Metric 3: Expenses (-) */}
-        <div className="bg-rose-50/50 border border-rose-200/80 rounded-2xl p-3 sm:p-3.5 space-y-1">
+        <div
+          onClick={() => setDrilldownModal('expenses')}
+          className="bg-rose-50/50 hover:bg-rose-100/60 border border-rose-200/80 hover:border-rose-400 rounded-2xl p-3 sm:p-3.5 space-y-1 cursor-pointer transition-all active:scale-[0.99] group shadow-2xs"
+          title="Click to view Shop Expenses breakdown"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider font-mono">
+            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider font-mono group-hover:text-rose-800 flex items-center gap-1">
               Expenses (-)
+              <ExternalLink className="w-2.5 h-2.5 text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity" />
             </span>
-            <Receipt className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <Receipt className="w-3.5 h-3.5 text-rose-400 group-hover:text-rose-600 shrink-0" />
           </div>
           <div className="text-base sm:text-lg font-black text-rose-600 font-mono">
             - {formatPrice(drawerFinancials.expensesTotal)}
           </div>
           <div className="text-[10px] font-mono text-rose-500/90">
-            {drawerFinancials.expensesCount} {drawerFinancials.expensesCount === 1 ? 'item' : 'items'}
+            {drawerFinancials.expensesCount} {drawerFinancials.expensesCount === 1 ? 'item' : 'items'} • Click to view
           </div>
         </div>
 
         {/* Metric 4: Net value in drawer */}
-        <div className="bg-emerald-50 border border-emerald-300 rounded-2xl p-3 sm:p-3.5 space-y-1">
+        <div
+          onClick={() => setDrilldownModal('drawer')}
+          className="bg-emerald-50 hover:bg-emerald-100/70 border border-emerald-300 hover:border-emerald-500 rounded-2xl p-3 sm:p-3.5 space-y-1 cursor-pointer transition-all active:scale-[0.99] group shadow-2xs"
+          title="Click to view Cash Drawer reconciliation"
+        >
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-black text-emerald-950 uppercase tracking-wider font-mono">
+            <span className="text-[11px] font-black text-emerald-950 uppercase tracking-wider font-mono group-hover:text-emerald-900 flex items-center gap-1">
               Net value in drawer
+              <ExternalLink className="w-2.5 h-2.5 text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity" />
             </span>
             <Wallet className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
           </div>
@@ -955,10 +973,9 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       </div>
 
       {/* ========================================================================= */}
-      {/* HEADER & TOP CONTROL BAR                                                  */}
+      {/* HEADER & TOP CONTROL BAR (CLEANED UP - NO LEGACY CSV/PRINT BUTTONS)        */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-stone-100 pb-2.5 pt-1">
-        
         {/* Title and High-Level Summary */}
         <div className="flex items-center space-x-2.5">
           <div className="w-8 h-8 rounded-xl bg-emerald-500 text-stone-950 flex items-center justify-center font-black shadow-xs shrink-0">
@@ -969,27 +986,6 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               {lang === 'my' ? 'ဝန်ဆောင်မှု & Stylist စာရင်း' : 'Service & Stylist Matrix'}
             </h3>
           </div>
-        </div>
-
-        {/* Quick Export & Actions */}
-        <div className="flex items-center space-x-1.5 shrink-0 print:hidden flex-wrap">
-          <button
-            onClick={handleExportCSV}
-            className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-mono font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-colors shadow-2xs"
-            title="Download CSV Spreadsheet"
-          >
-            <Download className="w-3 h-3 text-stone-600" />
-            <span>CSV</span>
-          </button>
-
-          <button
-            onClick={handlePrint}
-            className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-mono font-bold rounded-lg flex items-center space-x-1 cursor-pointer transition-colors shadow-2xs"
-            title="Print Matrix View"
-          >
-            <Printer className="w-3 h-3 text-stone-600" />
-            <span>Print</span>
-          </button>
         </div>
       </div>
 
@@ -2148,6 +2144,236 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
         )}
 
       </div>
+
+      {/* ========================================================================= */}
+      {/* 4 INTERACTIVE FINANCIAL DRILL-DOWN MODALS (READ-ONLY BREAKDOWNS)          */}
+      {/* ========================================================================= */}
+      {drilldownModal && (
+        <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 print:hidden animate-in fade-in duration-150">
+          <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-5 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl font-sans text-xs">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-xl bg-stone-900 text-white flex items-center justify-center shrink-0">
+                  {drilldownModal === 'services' && <Scissors className="w-4 h-4 text-emerald-400" />}
+                  {drilldownModal === 'retail' && <ShoppingBag className="w-4 h-4 text-amber-400" />}
+                  {drilldownModal === 'expenses' && <Receipt className="w-4 h-4 text-rose-400" />}
+                  {drilldownModal === 'drawer' && <Wallet className="w-4 h-4 text-emerald-400" />}
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-stone-950 font-mono">
+                    {drilldownModal === 'services' && (lang === 'my' ? 'ဝန်ဆောင်မှု ငွေကြေးအသေးစိတ်' : 'Services Financial Breakdown')}
+                    {drilldownModal === 'retail' && (lang === 'my' ? 'ကုန်ပစ္စည်းအရောင်း စာရင်း' : 'Retail Product Sales Breakdown')}
+                    {drilldownModal === 'expenses' && (lang === 'my' ? 'နေ့စဉ် ဆိုင်အသုံးစရိတ် စာရင်း' : 'Shop Expenses Breakdown')}
+                    {drilldownModal === 'drawer' && (lang === 'my' ? 'ငွေစာရင်း ရှင်းတမ်းနှင့် အံဆွဲငွေ' : 'Cash Drawer & Inflow Reconciliation')}
+                  </h3>
+                  <p className="text-[11px] text-stone-500 font-mono">
+                    {periodLabel}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDrilldownModal(null)}
+                className="p-1.5 rounded-xl hover:bg-stone-100 text-stone-400 hover:text-stone-700 cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto py-3.5 space-y-3 font-mono">
+              {/* 1. SERVICES DRILLDOWN */}
+              {drilldownModal === 'services' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-center">
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Total</span>
+                      <span className="font-bold text-stone-900">{formatPrice(drawerFinancials.servicesTotal)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Cash</span>
+                      <span className="font-bold text-emerald-700">{formatPrice(drawerFinancials.servicesCash)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Digital</span>
+                      <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
+                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-6">
+                      <span>Time</span>
+                      <span className="col-span-2">Customer & Stylist</span>
+                      <span className="col-span-2">Service</span>
+                      <span className="text-right">Amount</span>
+                    </div>
+                    {tableBookings.filter(b => b.status !== 'cancelled').map(b => (
+                      <div key={b.id} className="px-3 py-2 text-xs grid grid-cols-6 hover:bg-stone-50 items-center">
+                        <span className="text-stone-500 text-[11px]">{b.timeSlot || 'Anytime'}</span>
+                        <div className="col-span-2 truncate">
+                          <span className="font-bold text-stone-900">{b.customerName || 'Walk-in'}</span>
+                          <span className="text-stone-400 block text-[10px]">({b.designerName || 'Stylist'})</span>
+                        </div>
+                        <span className="col-span-2 text-stone-700 truncate">{b.serviceName}</span>
+                        <div className="text-right">
+                          <span className="font-bold text-stone-900 block">{formatPrice(b.servicePrice ?? b.price ?? 0)}</span>
+                          <span className="text-[10px] text-stone-400 uppercase">{b.paymentMethod || 'cash'}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {tableBookings.filter(b => b.status !== 'cancelled').length === 0 && (
+                      <div className="p-6 text-center text-stone-400 text-xs">No service records for this period.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 2. RETAIL DRILLDOWN */}
+              {drilldownModal === 'retail' && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-center">
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Total</span>
+                      <span className="font-bold text-stone-900">{formatPrice(drawerFinancials.retailTotal)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Cash</span>
+                      <span className="font-bold text-emerald-700">{formatPrice(drawerFinancials.retailCash)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-stone-400 uppercase block">Digital</span>
+                      <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.retailDigital)}</span>
+                    </div>
+                  </div>
+
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
+                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5">
+                      <span className="col-span-2">Product Name</span>
+                      <span>Qty</span>
+                      <span>Seller / Staff</span>
+                      <span className="text-right">Amount</span>
+                    </div>
+                    {allRetailSales.map(r => (
+                      <div key={r.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50 items-center">
+                        <div className="col-span-2">
+                          <span className="font-bold text-stone-900 block">{r.productName || 'Product'}</span>
+                          <span className="text-[10px] text-stone-400 uppercase">{r.paymentMethod || 'cash'}</span>
+                        </div>
+                        <span className="text-stone-700">{r.quantity || 1} pcs</span>
+                        <span className="text-stone-600 truncate">{(r as any).sellerName || (r as any).staffName || 'Staff'}</span>
+                        <span className="text-right font-bold text-stone-900">{formatPrice(r.totalPrice || 0)}</span>
+                      </div>
+                    ))}
+                    {allRetailSales.length === 0 && (
+                      <div className="p-6 text-center text-stone-400 text-xs">No retail sales recorded for this period.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. EXPENSES DRILLDOWN */}
+              {drilldownModal === 'expenses' && (
+                <div className="space-y-3">
+                  <div className="bg-rose-50 p-2.5 rounded-xl border border-rose-200 text-center">
+                    <span className="text-[10px] text-rose-600 uppercase block">Total Expenses</span>
+                    <span className="font-black text-rose-700 text-base">{formatPrice(drawerFinancials.expensesTotal)}</span>
+                    <span className="text-[10px] text-rose-500 block">({drawerFinancials.expensesCount} items)</span>
+                  </div>
+
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
+                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5">
+                      <span className="col-span-2">Title & Category</span>
+                      <span>Payee</span>
+                      <span>Payment</span>
+                      <span className="text-right">Amount</span>
+                    </div>
+                    {allExpenses.map(e => (
+                      <div key={e.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50 items-center">
+                        <div className="col-span-2">
+                          <span className="font-bold text-stone-900 block">{e.title || 'Expense'}</span>
+                          <span className="text-[10px] text-stone-400 uppercase">{e.category || 'General'}</span>
+                        </div>
+                        <span className="text-stone-700 truncate">{(e as any).payee || '—'}</span>
+                        <span className="text-[10px] text-stone-500 uppercase">{(e as any).paymentMethod || 'cash'}</span>
+                        <span className="text-right font-bold text-rose-600">-{formatPrice(e.amount || 0)}</span>
+                      </div>
+                    ))}
+                    {allExpenses.length === 0 && (
+                      <div className="p-6 text-center text-stone-400 text-xs">No expenses recorded for this period.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. DRAWER CASH RECONCILIATION */}
+              {drilldownModal === 'drawer' && (
+                <div className="space-y-3">
+                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2">
+                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider">💵 Physical Cash In Drawer</h4>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">➕ Cash In (Services):</span>
+                        <span className="font-bold text-emerald-700">+{formatPrice(drawerFinancials.servicesCash)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">➕ Cash In (Retail Sales):</span>
+                        <span className="font-bold text-emerald-700">+{formatPrice(drawerFinancials.retailCash)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">➖ Cash Out (Expenses):</span>
+                        <span className="font-bold text-rose-600">-{formatPrice(drawerFinancials.expensesCash)}</span>
+                      </div>
+                      <div className="border-t border-stone-300 pt-1.5 flex justify-between text-sm font-black">
+                        <span className="text-stone-950">Net Drawer Cash:</span>
+                        <span className="text-emerald-700">{formatPrice(drawerFinancials.cashInDrawer)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2">
+                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider">📱 Digital Transactions (KPay / Wave)</h4>
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">Digital (Services):</span>
+                        <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-stone-600">Digital (Retail):</span>
+                        <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.retailDigital)}</span>
+                      </div>
+                      <div className="border-t border-stone-300 pt-1.5 flex justify-between text-sm font-black">
+                        <span className="text-stone-950">Total Digital Inflow:</span>
+                        <span className="text-blue-700">{formatPrice(drawerFinancials.totalDigitalInflow)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-emerald-950 text-white p-3.5 rounded-2xl flex justify-between items-center">
+                    <div>
+                      <span className="text-[11px] text-emerald-300 uppercase tracking-wider block font-bold">Total Net Business Inflow</span>
+                      <span className="text-[10px] text-emerald-400">Cash in Drawer + Digital Inflows</span>
+                    </div>
+                    <span className="text-base font-black text-emerald-300">{formatPrice(drawerFinancials.netValueInDrawer)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-stone-100 pt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setDrilldownModal(null)}
+                className="px-4 py-1.5 bg-stone-900 hover:bg-black text-white rounded-xl font-bold font-mono text-xs cursor-pointer transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

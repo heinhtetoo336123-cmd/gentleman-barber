@@ -307,11 +307,25 @@ export interface RetailSale {
 // ALL-IN-ONE DAILY LEDGER & YEARLY ROLLUP ARCHITECTURE
 // =========================================================================
 
+export interface DesignerDaySummary {
+  totalJobs: number;
+  totalValue: number;
+  commissionEarned: number;
+}
+
 export interface DayLedgerSummary {
   totalRevenue: number;
   totalExpenses: number;
   netProfit: number;
   totalBookings: number;
+  designers?: Record<string, DesignerDaySummary>;
+  services?: Record<string, { count: number; revenue: number }>;
+  payments?: {
+    cash: number;
+    kpay: number;
+    wave: number;
+    other: number;
+  };
 }
 
 export interface DayLedger {
