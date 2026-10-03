@@ -1,6 +1,6 @@
 {
   "name": "GENTLEMAN",
-  "description": "Mobile-first PWA booking app for GENTLEMAN Barber Shop with appointment tracking, service catalog, and real-time management.",
+  "description": "မြိတ်မြို့ Market Garden (Room No. K7) ရှိ GENTLEMAN BARBERSHOP တွင် လူကြိုက်များသော Stylist လက်ရာများဖြင့် ဆံပင်ပုံစံ၊ မျက်နှာသစ်၊ မုတ်ဆိတ်ရိတ် ဝန်ဆောင်မှုများကို အွန်လိုင်းမှ အလွယ်တကူ Booking ရယူလိုက်ပါ။",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

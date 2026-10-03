@@ -4,6 +4,7 @@ import { Language, translations } from './data/i18n';
 import { decryptSessionData } from './lib/authCrypto';
 import { api } from './api/client';
 import { getAudioContext, requestNotificationPermission, isNotificationForClient, isNotificationForBarber, getClearedNotificationIds } from './utils/notifications';
+import { syncStylistSeo } from './utils/seo';
 
 import { RoleSelectionScreen } from './components/RoleSelectionScreen';
 import { Header } from './components/Header';
@@ -217,6 +218,11 @@ export default function App() {
       unsubBookings();
     };
   }, []);
+
+  // Dynamically synchronize live stylists with Schema.org & SEO meta keywords
+  useEffect(() => {
+    syncStylistSeo(designers);
+  }, [designers]);
 
   // Subscribe to clients list ONLY when authenticated as Admin (Saves 150 reads per client visitor)
   useEffect(() => {
