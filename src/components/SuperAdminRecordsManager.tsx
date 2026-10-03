@@ -3,6 +3,7 @@ import { Booking, Designer, Service, UserProfile, BookingStatus } from '../types
 import { api } from '../api/client';
 import { formatPrice } from '../utils/formatters';
 import { playSuccessChime, playNotificationChime } from '../utils/audio';
+import { verifySuperAdminPassword, verifySuperAdminPin } from '../lib/authCrypto';
 import {
   Trash2,
   Search,
@@ -63,6 +64,8 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
   // Deletion Modal
   const [recordToDelete, setRecordToDelete] = useState<Booking | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deletePassword, setDeletePassword] = useState<string>('');
+  const [deletePasswordError, setDeletePasswordError] = useState<string>('');
 
   // Toast
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -198,15 +201,30 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
     setCurrentPage(1);
   }, [searchQuery, selectedDate, statusFilter, typeFilter, pageSize]);
 
-  // ROBUST ATOMIC DELETION LOGIC
+  // ROBUST ATOMIC DELETION LOGIC (PASSWORD PROTECTED)
   const handleConfirmDelete = async () => {
     if (!recordToDelete) return;
+
+    if (!deletePassword.trim()) {
+      setDeletePasswordError(lang === 'my' ? 'Superadmin စကားဝှက် / PIN ထည့်သွင်းပါ' : 'Please enter Superadmin Password / PIN');
+      return;
+    }
+
+    const isValid = verifySuperAdminPassword(deletePassword.trim()) || verifySuperAdminPin(deletePassword.trim());
+    if (!isValid) {
+      setDeletePasswordError(lang === 'my' ? 'စကားဝှက် / PIN မှားယွင်းနေပါသည်' : 'Incorrect Superadmin Password / PIN');
+      playNotificationChime();
+      return;
+    }
+
     const target = recordToDelete;
     const cleanDate = (target.date || new Date().toISOString().split('T')[0]).split('T')[0];
 
-    // e) Optimistically remove item from UI immediately without page refresh
+    // Optimistically remove item from UI immediately without page refresh
     setRecords((prev) => prev.filter((r) => r.id !== target.id));
     setRecordToDelete(null);
+    setDeletePassword('');
+    setDeletePasswordError('');
     setIsDeleting(true);
 
     try {
@@ -748,15 +766,16 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
       {/* DEDICATED ATOMIC DELETION CONFIRMATION MODAL */}
       <AnimatePresence>
         {recordToDelete && (
-          <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               className="bg-white border border-rose-200 rounded-3xl p-5 sm:p-6 w-full max-w-md space-y-4 shadow-2xl font-mono"
             >
               <div className="flex items-center space-x-3 text-rose-700 border-b border-rose-100 pb-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-100 border border-rose-200 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-200 flex items-center justify-center shrink-0">
                   <Trash2 className="w-5 h-5 text-rose-600" />
                 </div>
                 <div>
@@ -770,7 +789,7 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
               </div>
 
               {/* Record Summary Card */}
-              <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-3.5 space-y-2 text-xs">
+              <div className="bg-stone-50 border border-stone-200 rounded-2xl p-3.5 space-y-2 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-stone-500">Booking Code:</span>
                   <span className="font-extrabold text-stone-900">
@@ -801,15 +820,47 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
                 </div>
               </div>
 
-              <div className="text-[11px] text-stone-600 leading-relaxed bg-stone-50 p-3 rounded-xl border border-stone-200">
-                ⚠️ <span className="font-bold text-stone-900">အရေးကြီးသတိပေးချက်:</span> ဤမှတ်တမ်းအား barber-db ၏ <span className="font-bold text-rose-700">days/{recordToDelete.date}</span> Daily Ledger ထဲမှ ဖယ်ထုတ်ကာ နေ့စဉ်ဝင်ငွေနှင့် ဘိုကင်အရေအတွက်မှ နုတ်ယူသွားပါမည်။ Standalone doc <span className="font-bold text-stone-800">bookings/{recordToDelete.id}</span> ကိုပါ အပြီးတိုင် ဖျက်ပစ်ပါမည်။
+              <div className="text-[11px] text-stone-600 leading-relaxed bg-rose-50/50 p-3 rounded-xl border border-rose-100">
+                ⚠️ <span className="font-bold text-stone-900">အရေးကြီးသတိပေးချက်:</span> ဤမှတ်တမ်းအား barber-db ၏ <span className="font-bold text-rose-700">days/{recordToDelete.date}</span> Daily Ledger ထဲမှ ဖယ်ထုတ်ကာ နေ့စဉ်ဝင်ငွေမှ နုတ်ယူပြီး အပြီးတိုင် ဖျက်ပစ်ပါမည်။
+              </div>
+
+              {/* Password Protection Input */}
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-bold text-stone-800 flex items-center space-x-1.5">
+                  <span>🔒</span>
+                  <span>{lang === 'my' ? 'Superadmin စကားဝှက် / PIN ရိုက်ထည့်ပါ:' : 'Enter Superadmin Password / PIN:'}</span>
+                </label>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value);
+                    setDeletePasswordError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmDelete();
+                  }}
+                  placeholder="••••••••"
+                  className="w-full bg-white border border-stone-300 rounded-xl px-3.5 py-2.5 text-xs text-stone-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500 transition-all"
+                  autoFocus
+                />
+                {deletePasswordError && (
+                  <p className="text-[11px] font-bold text-rose-600 flex items-center space-x-1 mt-1 animate-in fade-in duration-150">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{deletePasswordError}</span>
+                  </p>
+                )}
               </div>
 
               {/* Action Buttons */}
               <div className="flex items-center space-x-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setRecordToDelete(null)}
+                  onClick={() => {
+                    setRecordToDelete(null);
+                    setDeletePassword('');
+                    setDeletePasswordError('');
+                  }}
                   disabled={isDeleting}
                   className="w-1/2 py-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 font-bold text-xs uppercase cursor-pointer transition-all"
                 >
@@ -819,7 +870,7 @@ export const SuperAdminRecordsManager: React.FC<SuperAdminRecordsManagerProps> =
                   type="button"
                   onClick={handleConfirmDelete}
                   disabled={isDeleting}
-                  className="w-1/2 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs uppercase flex items-center justify-center space-x-1.5 cursor-pointer transition-all shadow-md disabled:opacity-50"
+                  className="w-1/2 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold text-xs uppercase flex items-center justify-center space-x-1.5 cursor-pointer transition-all shadow-xs disabled:opacity-50"
                 >
                   {isDeleting ? (
                     <>

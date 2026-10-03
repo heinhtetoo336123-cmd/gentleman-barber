@@ -3803,9 +3803,8 @@ export const api = {
   async getNotifications(role: UserRole | 'all' = 'all', options?: { barberId?: string; limitCount?: number }): Promise<NotificationItem[]> {
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') return items;
-      if (role === 'superadmin') return [];
-      if (role === 'admin') {
-        return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
+      if (role === 'admin' || role === 'superadmin') {
+        return items.filter(n => n.forRole === 'admin' || n.forRole === 'superadmin' || n.forRole === 'all' || !n.forRole);
       }
       if (role === 'barber') {
         return items.filter(n => isNotificationForBarber(n, options?.barberId));
@@ -3826,17 +3825,12 @@ export const api = {
     onUpdate: (notifications: NotificationItem[]) => void,
     options?: { barberId?: string; limitCount?: number }
   ): () => void {
-    if (role === 'superadmin') {
-      onUpdate([]);
-      return () => {};
-    }
-
     const filterByRole = (items: NotificationItem[]) => {
       if (role === 'all') {
         return items;
       }
-      if (role === 'admin') {
-        return items.filter(n => n.forRole === 'admin' || (n.forRole === 'all' && !n.targetMemberTier && !n.targetClientPhone) || !n.forRole);
+      if (role === 'admin' || role === 'superadmin') {
+        return items.filter(n => n.forRole === 'admin' || n.forRole === 'superadmin' || n.forRole === 'all' || !n.forRole);
       }
       if (role === 'barber') {
         return items.filter(n => isNotificationForBarber(n, options?.barberId));
@@ -3858,29 +3852,24 @@ export const api = {
     roleCallback(cached);
 
     // Ephemeral Real-Time Cross-Device Relay Queue
-    // Listens with a tight limit (20 docs max).
-    // When a message is delivered to this device's local store, it is immediately deleted from Firestore
-    // ("ပို့စရာရှိတာပို့ပြီး ဖျက်အောင်") so cloud read count NEVER accumulates and stays near 0.
+    // Listens with a limit of 30 docs.
     let unsubFirestore: (() => void) | null = null;
     try {
-      const notifsQuery = query(collection(db, 'notifications'), limit(20));
+      const notifsQuery = query(collection(db, 'notifications'), limit(30));
 
       unsubFirestore = onSnapshot(notifsQuery, (snap) => {
         if (snap.empty && snap.docChanges().length === 0) return;
         const nowMs = Date.now();
         const currentLocal = getLocalData<NotificationItem[]>(LOCAL_NOTIFS_KEY, []);
-        const localIdSet = new Set(currentLocal.map(n => n.id));
+        const localIdMap = new Map(currentLocal.map(n => [n.id, n]));
         let hasNew = false;
         const newIncoming: NotificationItem[] = [];
 
-        // Strictly process added changes only so that auto-delete (removed events) never trigger re-processing or re-fetch
-        snap.docChanges().forEach((change) => {
-          if (change.type !== 'added') return;
-          const d = change.doc;
-          const data = d.data() as Partial<NotificationItem>;
-          const notifId = d.id;
+        snap.docs.forEach((docSnap) => {
+          const data = docSnap.data() as Partial<NotificationItem>;
+          const notifId = docSnap.id;
 
-          // 1. Auto-cleanup: if older than 24 hours, delete from cloud immediately
+          // 1. Auto-cleanup: if older than 24 hours, delete from cloud
           const createdTime = data.timestamp ? new Date(data.timestamp).getTime() : 0;
           if (createdTime && (nowMs - createdTime > 24 * 60 * 60 * 1000)) {
             deleteDoc(doc(db, 'notifications', notifId)).catch(() => {});
@@ -3911,9 +3900,9 @@ export const api = {
           const matches = filterByRole([item]);
           if (matches.length > 0) {
             // Is it new to this device?
-            if (!localIdSet.has(notifId)) {
+            if (!localIdMap.has(notifId)) {
               newIncoming.push(item);
-              localIdSet.add(notifId);
+              localIdMap.set(notifId, item);
               hasNew = true;
 
               // Sound and local in-app alert
@@ -3923,10 +3912,6 @@ export const api = {
                 sendLocalPushNotification(item.title, item.message);
               }
             }
-
-            // AUTO-DELETE PATTERN: Immediately delete consumed notification from Firestore
-            // This prevents cloud documents from accumulating and guarantees 0 read amplification.
-            deleteDoc(doc(db, 'notifications', notifId)).catch(() => {});
           }
         });
 

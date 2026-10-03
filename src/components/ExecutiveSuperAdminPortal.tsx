@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { formatPrice } from '../utils/formatters';
 import { downloadCsvFile } from '../utils/exportHelpers';
 import { playSuccessChime, playNotificationChime } from '../utils/audio';
+import { verifySuperAdminPassword, verifySuperAdminPin } from '../lib/authCrypto';
 import {
   Trash2,
   Search,
@@ -75,6 +76,8 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
   const [isRecordsLoading, setIsRecordsLoading] = useState<boolean>(false);
   const [recordToDelete, setRecordToDelete] = useState<Booking | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deletePassword, setDeletePassword] = useState<string>('');
+  const [deletePasswordError, setDeletePasswordError] = useState<string>('');
 
   // -------------------------------------------------------------
   // TAB 2: FINANCIAL AUDITOR STATE
@@ -185,10 +188,23 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
   }, [activeTab, loadFinancialData]);
 
   // -------------------------------------------------------------
-  // ATOMIC DELETION LOGIC (TAB 1)
+  // ATOMIC DELETION LOGIC (TAB 1 - PASSWORD PROTECTED)
   // -------------------------------------------------------------
   const handleConfirmDelete = async () => {
     if (!recordToDelete) return;
+
+    if (!deletePassword.trim()) {
+      setDeletePasswordError(lang === 'my' ? 'Superadmin စကားဝှက် / PIN ထည့်သွင်းပါ' : 'Please enter Superadmin Password / PIN');
+      return;
+    }
+
+    const isValid = verifySuperAdminPassword(deletePassword.trim()) || verifySuperAdminPin(deletePassword.trim());
+    if (!isValid) {
+      setDeletePasswordError(lang === 'my' ? 'စကားဝှက် / PIN မှားယွင်းနေပါသည်' : 'Incorrect Superadmin Password / PIN');
+      playNotificationChime();
+      return;
+    }
+
     const target = recordToDelete;
     const cleanDate = (target.date || todayStr).split('T')[0];
 
@@ -198,6 +214,8 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
       allBookingsCache.current = allBookingsCache.current.filter((r) => r.id !== target.id);
     }
     setRecordToDelete(null);
+    setDeletePassword('');
+    setDeletePasswordError('');
     setIsDeleting(true);
 
     try {
@@ -998,15 +1016,16 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
       {/* ATOMIC DELETION CONFIRMATION MODAL */}
       <AnimatePresence>
         {recordToDelete && (
-          <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
+          <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-4 print:hidden">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
               className="bg-white border border-rose-200 rounded-3xl p-5 w-full max-w-md space-y-4 shadow-2xl font-mono text-xs"
             >
               <div className="flex items-center space-x-2.5 text-rose-700 border-b border-rose-100 pb-2.5">
-                <div className="w-8 h-8 rounded-xl bg-rose-100 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-center shrink-0">
                   <Trash2 className="w-4 h-4 text-rose-600" />
                 </div>
                 <div>
@@ -1041,16 +1060,48 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
                 </div>
               </div>
 
-              <p className="text-[11px] text-stone-600 leading-relaxed">
+              <div className="text-[11px] text-stone-600 leading-relaxed bg-rose-50/50 p-3 rounded-xl border border-rose-100">
                 ⚠️ ဤမှတ်တမ်းအား barber-db ၏ <span className="font-bold text-rose-700">days/{recordToDelete.date}</span> Daily Ledger ထဲမှ ဖယ်ထုတ်ကာ ဝင်ငွေစာရင်းမှ နုတ်ယူပြီး အပြီးတိုင် ဖျက်ပစ်ပါမည်။
-              </p>
+              </div>
+
+              {/* Password Protection Input */}
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs font-bold text-stone-800 flex items-center space-x-1.5">
+                  <span>🔒</span>
+                  <span>{lang === 'my' ? 'Superadmin စကားဝှက် / PIN ရိုက်ထည့်ပါ:' : 'Enter Superadmin Password / PIN:'}</span>
+                </label>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value);
+                    setDeletePasswordError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmDelete();
+                  }}
+                  placeholder="••••••••"
+                  className="w-full bg-white border border-stone-300 rounded-xl px-3.5 py-2 text-xs text-stone-900 font-mono focus:outline-hidden focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500 transition-all"
+                  autoFocus
+                />
+                {deletePasswordError && (
+                  <p className="text-[11px] font-bold text-rose-600 flex items-center space-x-1 mt-1 animate-in fade-in duration-150">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{deletePasswordError}</span>
+                  </p>
+                )}
+              </div>
 
               <div className="flex items-center space-x-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => setRecordToDelete(null)}
+                  onClick={() => {
+                    setRecordToDelete(null);
+                    setDeletePassword('');
+                    setDeletePasswordError('');
+                  }}
                   disabled={isDeleting}
-                  className="w-1/2 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold uppercase transition-colors"
+                  className="w-1/2 py-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 active:scale-95 text-stone-700 font-bold uppercase transition-all"
                 >
                   မဖျက်တော့ပါ
                 </button>
@@ -1058,7 +1109,7 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
                   type="button"
                   onClick={handleConfirmDelete}
                   disabled={isDeleting}
-                  className="w-1/2 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold uppercase flex items-center justify-center space-x-1 transition-colors"
+                  className="w-1/2 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-bold uppercase flex items-center justify-center space-x-1 transition-all shadow-xs disabled:opacity-50"
                 >
                   {isDeleting ? 'ဖျက်နေသည်...' : 'အတည်ပြု ဖျက်မည်'}
                 </button>

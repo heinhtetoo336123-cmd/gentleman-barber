@@ -5,7 +5,7 @@ import { getLocalTodayStr } from '../utils/timeSlots';
 import { api } from '../api/client';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, limit } from 'firebase/firestore';
-import { downloadCsvFile } from '../utils/exportHelpers';
+import { downloadCsvFile, exportComprehensiveDateRangeToCsv } from '../utils/exportHelpers';
 import {
   Calendar,
   Download,
@@ -723,77 +723,17 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
     return { totalAppointments, walkinCount, bookingCount, totalServiceValue, totalCommission };
   }, [stylistDetailedBookings, designers]);
 
-  // Comprehensive Export to Excel/CSV with Unicode BOM (\uFEFF)
+  // Comprehensive Multi-Section Export to Excel/CSV with Unicode BOM (\uFEFF)
   const handleExportExcel = () => {
-    const headers = [
-      'Date',
-      'Time',
-      'Type',
-      'Booking Code',
-      'Customer',
-      'Phone',
-      'Stylist',
-      'Service',
-      'Payment Method',
-      'Amount (MMK)',
-      'Commission (MMK)',
-      'Status'
-    ];
-
-    let totalAmountSum = 0;
-    let totalCommissionSum = 0;
-
-    const rows: (string | number | boolean | null | undefined)[][] = stylistDetailedBookings.map((b) => {
-      const des = designers.find((d) => d.id === b.designerId);
-      const commRate = des?.commissionPercent ?? (b.commissionRate || 50);
-      const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
-      const comm = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
-        ? b.commissionAmount
-        : Math.round((finalPrice * commRate) / 100);
-
-      if (b.status !== 'cancelled') {
-        totalAmountSum += finalPrice;
-        totalCommissionSum += comm;
-      }
-
-      const servicesText = b.servicesList && b.servicesList.length > 0
-        ? b.servicesList.map(s => s.serviceName).join(' + ')
-        : b.serviceName;
-
-      return [
-        b.date || startDate,
-        b.timeSlot || '—',
-        b.isWalkin ? 'Walk-in' : 'Online Booking',
-        b.bookingCode || b.id.slice(0, 8),
-        b.customerName || 'Walk-in Guest',
-        b.customerPhone || '',
-        b.designerName || des?.name || 'Stylist',
-        servicesText || 'Service',
-        b.paymentMethod || 'cash',
-        finalPrice,
-        comm,
-        b.status
-      ];
-    });
-
-    // Summary Row at the bottom
-    rows.push([
-      'TOTAL SUMMARY',
-      '',
-      `${rows.length} records`,
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      totalAmountSum,
-      totalCommissionSum,
-      'Completed Total'
-    ]);
-
-    const filename = `GENTLEMAN_Transactions_Report_${startDate === endDate ? startDate : (startDate + '_to_' + endDate)}`;
-    downloadCsvFile(headers, rows, filename, [5]); // column 5 is Phone to preserve leading 0
+    exportComprehensiveDateRangeToCsv(
+      startDate,
+      endDate,
+      tableBookings,
+      allRetailSales,
+      allExpenses,
+      designers,
+      'GENTLEMAN_Transactions_Financial_Report'
+    );
   };
 
   return (
@@ -2149,19 +2089,19 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
       {/* 4 INTERACTIVE FINANCIAL DRILL-DOWN MODALS (READ-ONLY BREAKDOWNS)          */}
       {/* ========================================================================= */}
       {drilldownModal && (
-        <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 print:hidden animate-in fade-in duration-150">
-          <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-5 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl font-sans text-xs">
+        <div className="fixed inset-0 z-50 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 print:hidden animate-in fade-in duration-150">
+          <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-6 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl font-sans text-xs animate-in zoom-in-95 duration-150">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-xl bg-stone-900 text-white flex items-center justify-center shrink-0">
-                  {drilldownModal === 'services' && <Scissors className="w-4 h-4 text-emerald-400" />}
-                  {drilldownModal === 'retail' && <ShoppingBag className="w-4 h-4 text-amber-400" />}
-                  {drilldownModal === 'expenses' && <Receipt className="w-4 h-4 text-rose-400" />}
-                  {drilldownModal === 'drawer' && <Wallet className="w-4 h-4 text-emerald-400" />}
+                <div className="w-9 h-9 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0 shadow-2xs">
+                  {drilldownModal === 'services' && <Scissors className="w-4.5 h-4.5 text-emerald-700" />}
+                  {drilldownModal === 'retail' && <ShoppingBag className="w-4.5 h-4.5 text-amber-600" />}
+                  {drilldownModal === 'expenses' && <Receipt className="w-4.5 h-4.5 text-rose-600" />}
+                  {drilldownModal === 'drawer' && <Wallet className="w-4.5 h-4.5 text-emerald-700" />}
                 </div>
                 <div>
-                  <h3 className="text-sm font-black text-stone-950 font-mono">
+                  <h3 className="text-sm font-black text-stone-900 font-mono">
                     {drilldownModal === 'services' && (lang === 'my' ? 'ဝန်ဆောင်မှု ငွေကြေးအသေးစိတ်' : 'Services Financial Breakdown')}
                     {drilldownModal === 'retail' && (lang === 'my' ? 'ကုန်ပစ္စည်းအရောင်း စာရင်း' : 'Retail Product Sales Breakdown')}
                     {drilldownModal === 'expenses' && (lang === 'my' ? 'နေ့စဉ် ဆိုင်အသုံးစရိတ် စာရင်း' : 'Shop Expenses Breakdown')}
@@ -2176,7 +2116,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               <button
                 type="button"
                 onClick={() => setDrilldownModal(null)}
-                className="p-1.5 rounded-xl hover:bg-stone-100 text-stone-400 hover:text-stone-700 cursor-pointer transition-colors"
+                className="p-1.5 rounded-xl hover:bg-stone-100 active:scale-95 text-stone-400 hover:text-stone-700 cursor-pointer transition-all"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2187,7 +2127,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               {/* 1. SERVICES DRILLDOWN */}
               {drilldownModal === 'services' && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-center">
+                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-2xl border border-stone-200 text-center">
                     <div>
                       <span className="text-[10px] text-stone-400 uppercase block">Total</span>
                       <span className="font-bold text-stone-900">{formatPrice(drawerFinancials.servicesTotal)}</span>
@@ -2198,33 +2138,33 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                     </div>
                     <div>
                       <span className="text-[10px] text-stone-400 uppercase block">Digital</span>
-                      <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
+                      <span className="font-bold text-sky-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
                     </div>
                   </div>
 
-                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
-                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-6">
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                    <div className="bg-stone-50/80 px-3 py-2 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-6 border-b border-stone-200">
                       <span>Time</span>
                       <span className="col-span-2">Customer & Stylist</span>
                       <span className="col-span-2">Service</span>
                       <span className="text-right">Amount</span>
                     </div>
-                    {tableBookings.filter(b => b.status !== 'cancelled').map(b => (
-                      <div key={b.id} className="px-3 py-2 text-xs grid grid-cols-6 hover:bg-stone-50 items-center">
+                    {filteredBookings.map(b => (
+                      <div key={b.id} className="px-3 py-2 text-xs grid grid-cols-6 hover:bg-stone-50/80 items-center transition-colors">
                         <span className="text-stone-500 text-[11px]">{b.timeSlot || 'Anytime'}</span>
-                        <div className="col-span-2 truncate">
-                          <span className="font-bold text-stone-900">{b.customerName || 'Walk-in'}</span>
+                        <div className="col-span-2 truncate pr-1">
+                          <span className="font-bold text-stone-900 block truncate">{b.customerName || 'Walk-in'}</span>
                           <span className="text-stone-400 block text-[10px]">({b.designerName || 'Stylist'})</span>
                         </div>
-                        <span className="col-span-2 text-stone-700 truncate">{b.serviceName}</span>
+                        <span className="col-span-2 text-stone-700 truncate pr-1">{b.serviceName}</span>
                         <div className="text-right">
                           <span className="font-bold text-stone-900 block">{formatPrice(b.servicePrice ?? b.price ?? 0)}</span>
                           <span className="text-[10px] text-stone-400 uppercase">{b.paymentMethod || 'cash'}</span>
                         </div>
                       </div>
                     ))}
-                    {tableBookings.filter(b => b.status !== 'cancelled').length === 0 && (
-                      <div className="p-6 text-center text-stone-400 text-xs">No service records for this period.</div>
+                    {filteredBookings.length === 0 && (
+                      <div className="p-8 text-center text-stone-400 text-xs">No service records for this period.</div>
                     )}
                   </div>
                 </div>
@@ -2233,7 +2173,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               {/* 2. RETAIL DRILLDOWN */}
               {drilldownModal === 'retail' && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-center">
+                  <div className="grid grid-cols-3 gap-2 bg-stone-50 p-2.5 rounded-2xl border border-stone-200 text-center">
                     <div>
                       <span className="text-[10px] text-stone-400 uppercase block">Total</span>
                       <span className="font-bold text-stone-900">{formatPrice(drawerFinancials.retailTotal)}</span>
@@ -2244,21 +2184,21 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                     </div>
                     <div>
                       <span className="text-[10px] text-stone-400 uppercase block">Digital</span>
-                      <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.retailDigital)}</span>
+                      <span className="font-bold text-sky-700">{formatPrice(drawerFinancials.retailDigital)}</span>
                     </div>
                   </div>
 
-                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
-                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5">
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                    <div className="bg-stone-50/80 px-3 py-2 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5 border-b border-stone-200">
                       <span className="col-span-2">Product Name</span>
                       <span>Qty</span>
                       <span>Seller / Staff</span>
                       <span className="text-right">Amount</span>
                     </div>
-                    {allRetailSales.map(r => (
-                      <div key={r.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50 items-center">
-                        <div className="col-span-2">
-                          <span className="font-bold text-stone-900 block">{r.productName || 'Product'}</span>
+                    {filteredRetailSales.map(r => (
+                      <div key={r.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50/80 items-center transition-colors">
+                        <div className="col-span-2 pr-1 truncate">
+                          <span className="font-bold text-stone-900 block truncate">{r.productName || 'Product'}</span>
                           <span className="text-[10px] text-stone-400 uppercase">{r.paymentMethod || 'cash'}</span>
                         </div>
                         <span className="text-stone-700">{r.quantity || 1} pcs</span>
@@ -2266,8 +2206,8 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                         <span className="text-right font-bold text-stone-900">{formatPrice(r.totalPrice || 0)}</span>
                       </div>
                     ))}
-                    {allRetailSales.length === 0 && (
-                      <div className="p-6 text-center text-stone-400 text-xs">No retail sales recorded for this period.</div>
+                    {filteredRetailSales.length === 0 && (
+                      <div className="p-8 text-center text-stone-400 text-xs">No retail sales recorded for this period.</div>
                     )}
                   </div>
                 </div>
@@ -2276,23 +2216,23 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               {/* 3. EXPENSES DRILLDOWN */}
               {drilldownModal === 'expenses' && (
                 <div className="space-y-3">
-                  <div className="bg-rose-50 p-2.5 rounded-xl border border-rose-200 text-center">
-                    <span className="text-[10px] text-rose-600 uppercase block">Total Expenses</span>
+                  <div className="bg-rose-50/60 p-2.5 rounded-2xl border border-rose-200 text-center">
+                    <span className="text-[10px] text-rose-600 uppercase block font-bold">Total Expenses</span>
                     <span className="font-black text-rose-700 text-base">{formatPrice(drawerFinancials.expensesTotal)}</span>
                     <span className="text-[10px] text-rose-500 block">({drawerFinancials.expensesCount} items)</span>
                   </div>
 
-                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-xl overflow-hidden">
-                    <div className="bg-stone-100 px-3 py-1.5 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5">
+                  <div className="divide-y divide-stone-100 border border-stone-200 rounded-2xl overflow-hidden bg-white shadow-2xs">
+                    <div className="bg-stone-50/80 px-3 py-2 text-[10px] font-bold text-stone-500 uppercase grid grid-cols-5 border-b border-stone-200">
                       <span className="col-span-2">Title & Category</span>
                       <span>Payee</span>
                       <span>Payment</span>
                       <span className="text-right">Amount</span>
                     </div>
-                    {allExpenses.map(e => (
-                      <div key={e.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50 items-center">
-                        <div className="col-span-2">
-                          <span className="font-bold text-stone-900 block">{e.title || 'Expense'}</span>
+                    {filteredExpenses.map(e => (
+                      <div key={e.id} className="px-3 py-2 text-xs grid grid-cols-5 hover:bg-stone-50/80 items-center transition-colors">
+                        <div className="col-span-2 pr-1 truncate">
+                          <span className="font-bold text-stone-900 block truncate">{e.title || 'Expense'}</span>
                           <span className="text-[10px] text-stone-400 uppercase">{e.category || 'General'}</span>
                         </div>
                         <span className="text-stone-700 truncate">{(e as any).payee || '—'}</span>
@@ -2300,8 +2240,8 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                         <span className="text-right font-bold text-rose-600">-{formatPrice(e.amount || 0)}</span>
                       </div>
                     ))}
-                    {allExpenses.length === 0 && (
-                      <div className="p-6 text-center text-stone-400 text-xs">No expenses recorded for this period.</div>
+                    {filteredExpenses.length === 0 && (
+                      <div className="p-8 text-center text-stone-400 text-xs">No expenses recorded for this period.</div>
                     )}
                   </div>
                 </div>
@@ -2310,8 +2250,11 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               {/* 4. DRAWER CASH RECONCILIATION */}
               {drilldownModal === 'drawer' && (
                 <div className="space-y-3">
-                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2">
-                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider">💵 Physical Cash In Drawer</h4>
+                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2 shadow-2xs">
+                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center space-x-1.5">
+                      <span>💵</span>
+                      <span>Physical Cash In Drawer</span>
+                    </h4>
                     <div className="space-y-1.5 text-xs">
                       <div className="flex justify-between">
                         <span className="text-stone-600">➕ Cash In (Services):</span>
@@ -2325,37 +2268,40 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                         <span className="text-stone-600">➖ Cash Out (Expenses):</span>
                         <span className="font-bold text-rose-600">-{formatPrice(drawerFinancials.expensesCash)}</span>
                       </div>
-                      <div className="border-t border-stone-300 pt-1.5 flex justify-between text-sm font-black">
+                      <div className="border-t border-stone-200 pt-1.5 flex justify-between text-sm font-black">
                         <span className="text-stone-950">Net Drawer Cash:</span>
                         <span className="text-emerald-700">{formatPrice(drawerFinancials.cashInDrawer)}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2">
-                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider">📱 Digital Transactions (KPay / Wave)</h4>
+                  <div className="bg-stone-50 p-3.5 rounded-2xl border border-stone-200 space-y-2 shadow-2xs">
+                    <h4 className="text-xs font-bold text-stone-800 uppercase tracking-wider flex items-center space-x-1.5">
+                      <span>📱</span>
+                      <span>Digital Transactions (KPay / Wave)</span>
+                    </h4>
                     <div className="space-y-1.5 text-xs">
                       <div className="flex justify-between">
                         <span className="text-stone-600">Digital (Services):</span>
-                        <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
+                        <span className="font-bold text-sky-700">{formatPrice(drawerFinancials.servicesDigital)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-stone-600">Digital (Retail):</span>
-                        <span className="font-bold text-blue-700">{formatPrice(drawerFinancials.retailDigital)}</span>
+                        <span className="font-bold text-sky-700">{formatPrice(drawerFinancials.retailDigital)}</span>
                       </div>
-                      <div className="border-t border-stone-300 pt-1.5 flex justify-between text-sm font-black">
+                      <div className="border-t border-stone-200 pt-1.5 flex justify-between text-sm font-black">
                         <span className="text-stone-950">Total Digital Inflow:</span>
-                        <span className="text-blue-700">{formatPrice(drawerFinancials.totalDigitalInflow)}</span>
+                        <span className="text-sky-700">{formatPrice(drawerFinancials.totalDigitalInflow)}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="bg-emerald-950 text-white p-3.5 rounded-2xl flex justify-between items-center">
+                  <div className="bg-emerald-50 border border-emerald-200 text-stone-900 p-3.5 rounded-2xl flex justify-between items-center shadow-2xs">
                     <div>
-                      <span className="text-[11px] text-emerald-300 uppercase tracking-wider block font-bold">Total Net Business Inflow</span>
-                      <span className="text-[10px] text-emerald-400">Cash in Drawer + Digital Inflows</span>
+                      <span className="text-[11px] text-emerald-800 uppercase tracking-wider block font-bold">Total Net Business Inflow</span>
+                      <span className="text-[10px] text-stone-500 font-mono">Cash in Drawer + Digital Inflows</span>
                     </div>
-                    <span className="text-base font-black text-emerald-300">{formatPrice(drawerFinancials.netValueInDrawer)}</span>
+                    <span className="text-base font-black text-emerald-800 font-mono">{formatPrice(drawerFinancials.netValueInDrawer)}</span>
                   </div>
                 </div>
               )}
@@ -2366,7 +2312,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
               <button
                 type="button"
                 onClick={() => setDrilldownModal(null)}
-                className="px-4 py-1.5 bg-stone-900 hover:bg-black text-white rounded-xl font-bold font-mono text-xs cursor-pointer transition-colors"
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl font-bold font-mono text-xs cursor-pointer transition-all shadow-xs"
               >
                 Close
               </button>

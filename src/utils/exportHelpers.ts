@@ -635,3 +635,341 @@ export function exportMasterJsonBackup(
   URL.revokeObjectURL(url);
 }
 
+/**
+ * 9. Comprehensive Date-Range Multi-Section Excel / CSV Export
+ * Includes:
+ * - Section 1: Services / Bookings (Date, Time, Code, Customer, Stylist, Service, Payment Method, Amount, Commission)
+ * - Section 2: Retail Sales (Date, Time, Item Name, Quantity, Payment Method, Amount, Seller)
+ * - Section 3: Shop Expenses (Date, Payee / Title, Category, Payment Method, Amount, Recorded By)
+ * - Section 4: Financial Summary Row/Section (Total Services Revenue cash vs digital, Retail Sales, Expenses, Net Balance)
+ * Prepend UTF-8 BOM (\uFEFF) for flawless Myanmar Unicode rendering in Microsoft Excel.
+ */
+export function exportComprehensiveDateRangeToCsv(
+  startDate: string,
+  endDate: string,
+  bookings: Booking[],
+  retailSales: RetailSale[],
+  expenses: ShopExpense[],
+  designers: Designer[],
+  filenamePrefix = 'GENTLEMAN_Date_Range_Financial_Report'
+) {
+  const isSingleDate = startDate === endDate;
+  const dateRangeLabel = isSingleDate ? startDate : `${startDate} to ${endDate}`;
+
+  // Filter lists strictly within date range
+  const filteredBookings = (bookings || []).filter((b) => {
+    const bDate = (b.date || '').split('T')[0];
+    if (startDate && bDate < startDate) return false;
+    if (endDate && bDate > endDate) return false;
+    return b.status !== 'cancelled';
+  });
+
+  const filteredSales = (retailSales || []).filter((s) => {
+    const sDate = (s.date || '').split('T')[0];
+    if (startDate && sDate < startDate) return false;
+    if (endDate && sDate > endDate) return false;
+    return true;
+  });
+
+  const filteredExpenses = (expenses || []).filter((e) => {
+    const eDate = (e.date || '').split('T')[0];
+    if (startDate && eDate < startDate) return false;
+    if (endDate && eDate > endDate) return false;
+    return true;
+  });
+
+  // Calculate Aggregations
+  let servicesCash = 0;
+  let servicesDigital = 0;
+  let servicesTotal = 0;
+  let servicesCommission = 0;
+
+  filteredBookings.forEach((b) => {
+    const isCompleted = b.status === 'completed' || (b.isWalkin && (b.status as any) !== 'cancelled');
+    if (!isCompleted) return;
+
+    let rawGross = 0;
+    if (b.servicesList && b.servicesList.length > 0) {
+      rawGross = b.servicesList.reduce((sum, s) => sum + (s.servicePrice || 0), 0);
+    }
+    if (!rawGross || rawGross <= 0) {
+      rawGross = b.servicePrice || b.price || 0;
+    }
+    const finalPrice = Math.max(0, rawGross - (b.discountAmount || 0));
+    servicesTotal += finalPrice;
+
+    const des = designers.find((d) => d.id === b.designerId);
+    const commRate = des?.commissionPercent ?? ((b as any).commissionRate || 50);
+    const comm = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
+      ? b.commissionAmount
+      : Math.round((finalPrice * commRate) / 100);
+    servicesCommission += comm;
+
+    const pMethod = (b.paymentMethod || 'cash').toLowerCase();
+    if (pMethod === 'cash' || pMethod === 'pay_at_shop' || !b.paymentMethod) {
+      servicesCash += finalPrice;
+    } else {
+      servicesDigital += finalPrice;
+    }
+  });
+
+  let retailCash = 0;
+  let retailDigital = 0;
+  let retailTotal = 0;
+
+  filteredSales.forEach((s) => {
+    const val = Number(s.totalPrice || 0);
+    retailTotal += val;
+    const pMethod = (s.paymentMethod || 'cash').toLowerCase();
+    if (pMethod === 'cash' || !s.paymentMethod) {
+      retailCash += val;
+    } else {
+      retailDigital += val;
+    }
+  });
+
+  let expensesCash = 0;
+  let expensesDigital = 0;
+  let expensesTotal = 0;
+
+  filteredExpenses.forEach((e) => {
+    const val = Number(e.amount || 0);
+    expensesTotal += val;
+    const pMethod = ((e as any).paymentMethod || 'cash').toLowerCase();
+    if (pMethod === 'cash' || !pMethod) {
+      expensesCash += val;
+    } else {
+      expensesDigital += val;
+    }
+  });
+
+  const netCashInDrawer = servicesCash + retailCash - expensesCash;
+  const netDigitalInflow = servicesDigital + retailDigital - expensesDigital;
+  const grandNetBalance = servicesTotal + retailTotal - expensesTotal;
+
+  // Build CSV Rows Array
+  const csvLines: string[] = [];
+
+  const addLine = (cells: (string | number | boolean | null | undefined)[], phoneIndices: number[] = []) => {
+    const row = cells.map((cell, idx) => escapeCsvCell(cell, phoneIndices.includes(idx))).join(',');
+    csvLines.push(row);
+  };
+
+  const addEmptyLine = () => {
+    csvLines.push('');
+  };
+
+  // Report Title & Meta
+  addLine([`GENTLEMAN BARBER & GROOMING LOUNGE - FINANCIAL REPORT`]);
+  addLine([`Period: ${dateRangeLabel}`]);
+  addLine([`Export Generated At: ${new Date().toLocaleString()}`]);
+  addEmptyLine();
+
+  // SECTION 1: SERVICES & BOOKINGS
+  addLine([`--- SECTION 1: SERVICES & APPOINTMENTS (${filteredBookings.length} Records) ---`]);
+  addLine([
+    'Date (ရက်စွဲ)',
+    'Time (အချိန်)',
+    'Type (အမျိုးအစား)',
+    'Booking Code (ကုဒ်)',
+    'Customer (ဧည့်သည်)',
+    'Phone (ဖုန်း)',
+    'Stylist (ဆံသဆရာ)',
+    'Service (ဝန်ဆောင်မှု)',
+    'Payment Method (ငွေပေးချေမှု)',
+    'Amount MMK (ကျသင့်ငွေ)',
+    'Commission MMK (ကော်မရှင်)',
+    'Status (အခြေအနေ)'
+  ]);
+
+  filteredBookings.forEach((b) => {
+    const des = designers.find((d) => d.id === b.designerId);
+    const commRate = des?.commissionPercent ?? ((b as any).commissionRate || 50);
+    const finalPrice = Math.max(0, (b.servicePrice || b.price || 0) - (b.discountAmount || 0));
+    const comm = typeof b.commissionAmount === 'number' && b.commissionAmount >= 0
+      ? b.commissionAmount
+      : Math.round((finalPrice * commRate) / 100);
+
+    const servicesText = b.servicesList && b.servicesList.length > 0
+      ? b.servicesList.map(s => s.serviceName).join(' + ')
+      : b.serviceName;
+
+    addLine([
+      b.date || startDate,
+      b.timeSlot || '—',
+      b.isWalkin ? 'Walk-in' : 'Online Booking',
+      b.bookingCode || b.id.slice(0, 8),
+      b.customerName || 'Walk-in Guest',
+      b.customerPhone || '',
+      b.designerName || des?.name || 'Stylist',
+      servicesText || 'Service',
+      b.paymentMethod || 'cash',
+      finalPrice,
+      comm,
+      b.status
+    ], [5]);
+  });
+
+  addLine([
+    'SUBTOTAL (SERVICES)',
+    '',
+    `${filteredBookings.length} records`,
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    servicesTotal,
+    servicesCommission,
+    'Active/Completed'
+  ]);
+  addEmptyLine();
+
+  // SECTION 2: RETAIL SALES
+  addLine([`--- SECTION 2: RETAIL PRODUCT SALES (${filteredSales.length} Records) ---`]);
+  addLine([
+    'Date (ရက်စွဲ)',
+    'Sale ID',
+    'Product Name (ပစ္စည်းအမည်)',
+    'Quantity (အရေအတွက်)',
+    'Unit Price MMK',
+    'Payment Method (ငွေပေးချေမှု)',
+    'Total Amount MMK (စုစုပေါင်းကျသင့်ငွေ)',
+    'Barber / Seller (ရောင်းချသူ)',
+    'Customer (ဝယ်ယူသူ)',
+    'Customer Phone (ဖုန်း)'
+  ]);
+
+  filteredSales.forEach((s) => {
+    addLine([
+      s.date || startDate,
+      s.id,
+      s.productName,
+      s.quantity || 1,
+      s.unitPrice || 0,
+      s.paymentMethod || 'cash',
+      s.totalPrice || 0,
+      s.barberName || (s as any).staffName || 'Shop Counter',
+      s.customerName || '—',
+      s.customerPhone || '—'
+    ], [9]);
+  });
+
+  addLine([
+    'SUBTOTAL (RETAIL SALES)',
+    '',
+    '',
+    '',
+    '',
+    '',
+    retailTotal,
+    `${filteredSales.length} sales`,
+    '',
+    ''
+  ]);
+  addEmptyLine();
+
+  // SECTION 3: SHOP EXPENSES
+  addLine([`--- SECTION 3: SHOP EXPENSES (${filteredExpenses.length} Records) ---`]);
+  addLine([
+    'Date (ရက်စွဲ)',
+    'Expense ID',
+    'Title & Payee (အသုံးစရိတ် ခေါင်းစဉ်)',
+    'Category (အမျိုးအစား)',
+    'Payment Method (ငွေပေးချေမှု)',
+    'Amount MMK (ကုန်ကျငွေ)',
+    'Recorded By (စာရင်းသွင်းသူ)',
+    'Notes (မှတ်ချက်)'
+  ]);
+
+  filteredExpenses.forEach((e) => {
+    addLine([
+      e.date || startDate,
+      e.id,
+      `${e.title}${(e as any).payee ? ` (${(e as any).payee})` : ''}`,
+      e.category || 'General',
+      (e as any).paymentMethod || 'cash',
+      e.amount || 0,
+      e.recordedBy || 'Admin',
+      e.notes || '—'
+    ]);
+  });
+
+  addLine([
+    'SUBTOTAL (EXPENSES)',
+    '',
+    '',
+    '',
+    '',
+    expensesTotal,
+    `${filteredExpenses.length} items`,
+    ''
+  ]);
+  addEmptyLine();
+
+  // SECTION 4: COMPREHENSIVE FINANCIAL SUMMARY
+  addLine([`--- SECTION 4: COMPREHENSIVE FINANCIAL SUMMARY (${dateRangeLabel}) ---`]);
+  addLine([
+    'Category / Metric (ငွေစာရင်းအကျဉ်း)',
+    'Physical Cash MMK (ငွေသား)',
+    'Digital (KPay / Wave) MMK (ဒစ်ဂျစ်တယ်)',
+    'Total MMK (စုစုပေါင်းကျပ်)'
+  ]);
+  addLine([
+    '1. Services Revenue (ဆလွန်းဝန်ဆောင်မှု ဝင်ငွေ)',
+    servicesCash,
+    servicesDigital,
+    servicesTotal
+  ]);
+  addLine([
+    '2. Retail Sales Revenue (ကုန်ပစ္စည်းအရောင်း ဝင်ငွေ)',
+    retailCash,
+    retailDigital,
+    retailTotal
+  ]);
+  addLine([
+    '3. Shop Expenses (ဆိုင်အသုံးစရိတ် စုစုပေါင်း)',
+    `-${expensesCash}`,
+    `-${expensesDigital}`,
+    `-${expensesTotal}`
+  ]);
+  addLine([
+    '4. Barber Commission Total (ကော်မရှင်စုစုပေါင်း)',
+    '—',
+    '—',
+    servicesCommission
+  ]);
+  addLine([
+    '5. NET CASH IN DRAWER (အံဆွဲထဲရှိ အသားတင်ငွေသား)',
+    netCashInDrawer,
+    '—',
+    netCashInDrawer
+  ]);
+  addLine([
+    '6. NET DIGITAL INFLOW (ဒစ်ဂျစ်တယ် အသားတင် ဝင်ငွေ)',
+    '—',
+    netDigitalInflow,
+    netDigitalInflow
+  ]);
+  addLine([
+    '7. GRAND NET BALANCE (ဆိုင် အသားတင် ကျန်ငွေ)',
+    netCashInDrawer,
+    netDigitalInflow,
+    grandNetBalance
+  ]);
+
+  // Prepend UTF-8 BOM
+  const csvContent = '\uFEFF' + csvLines.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const filename = `${filenamePrefix}_${isSingleDate ? startDate : `${startDate}_to_${endDate}`}.csv`;
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
