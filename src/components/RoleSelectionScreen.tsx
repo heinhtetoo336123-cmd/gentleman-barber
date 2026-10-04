@@ -20,6 +20,7 @@ import {
 import { api } from '../api/client';
 import { normalizePhoneNumber } from '../utils/notifications';
 import { playSuccessChime, playNotificationChime } from '../utils/audio';
+import { triggerHapticFeedback } from '../utils/haptics';
 import {
   Scissors,
   User,
@@ -461,7 +462,10 @@ User Action Recommendation: ${diagnosticResult.recommendedActionEnglish || 'Sync
 
         <div className="flex items-center bg-white p-1 rounded-2xl border border-stone-200 shadow-xs">
           <button
-            onClick={() => onSelectLang('en')}
+            onClick={() => {
+              triggerHapticFeedback('light');
+              onSelectLang('en');
+            }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
               lang === 'en' ? 'bg-emerald-700 text-white shadow-xs' : 'text-stone-500 hover:text-stone-900'
             }`}
@@ -469,7 +473,10 @@ User Action Recommendation: ${diagnosticResult.recommendedActionEnglish || 'Sync
             EN
           </button>
           <button
-            onClick={() => onSelectLang('my')}
+            onClick={() => {
+              triggerHapticFeedback('light');
+              onSelectLang('my');
+            }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold font-sans transition-all cursor-pointer ${
               lang === 'my' ? 'bg-emerald-700 text-white shadow-xs' : 'text-stone-500 hover:text-stone-900'
             }`}

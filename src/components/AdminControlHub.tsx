@@ -69,6 +69,7 @@ import { SuperAdminHome } from './SuperAdminHome';
 import { SuperAdminReportsManager } from './SuperAdminReportsManager';
 import { AdminServiceBarberMatrixTable } from './AdminServiceBarberMatrixTable';
 import { SuperAdminRecordsManager } from './SuperAdminRecordsManager';
+import { triggerHapticFeedback } from '../utils/haptics';
 
 export type AdminSection =
   | 'hub'
@@ -368,6 +369,11 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
 
   const currentInfo = getSectionTitle(activeSection);
 
+  const handleSelectNavSection = (sec: AdminSection) => {
+    triggerHapticFeedback('light');
+    onSelectSection(sec);
+  };
+
   return (
     <div className="space-y-4">
       
@@ -376,7 +382,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
         <div className="bg-stone-950 border border-stone-800 rounded-2xl p-2 sm:p-2.5 flex items-center justify-between shadow-md">
           <div className="flex items-center space-x-2">
             <button
-              onClick={() => onSelectSection('hub')}
+              onClick={() => handleSelectNavSection('hub')}
               className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
                 activeSection !== 'clients' && activeSection !== 'settings'
                   ? 'bg-amber-500 text-stone-950 shadow-xs'
@@ -388,7 +394,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
             </button>
 
             <button
-              onClick={() => onSelectSection('clients')}
+              onClick={() => handleSelectNavSection('clients')}
               className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
                 activeSection === 'clients'
                   ? 'bg-amber-500 text-stone-950 shadow-xs'
@@ -400,7 +406,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
             </button>
 
             <button
-              onClick={() => onSelectSection('settings')}
+              onClick={() => handleSelectNavSection('settings')}
               className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold flex items-center space-x-2 transition-all cursor-pointer ${
                 activeSection === 'settings'
                   ? 'bg-amber-500 text-stone-950 shadow-xs'
@@ -424,7 +430,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
             <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:space-x-2.5 w-full sm:w-auto">
               {/* 1. Walk-in */}
               <button
-                onClick={() => onSelectSection('walkins')}
+                onClick={() => handleSelectNavSection('walkins')}
                 className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
                   activeSection === 'walkins'
                     ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
@@ -437,7 +443,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
 
               {/* 2. POS */}
               <button
-                onClick={() => onSelectSection('pos')}
+                onClick={() => handleSelectNavSection('pos')}
                 className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
                   activeSection === 'pos'
                     ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'
@@ -450,7 +456,7 @@ export const AdminControlHub: React.FC<AdminControlHubProps> = ({
 
               {/* 3. Expenses */}
               <button
-                onClick={() => onSelectSection('expenses')}
+                onClick={() => handleSelectNavSection('expenses')}
                 className={`min-h-[46px] sm:min-h-[50px] px-3.5 sm:px-5 py-2.5 sm:py-3 rounded-xl font-mono text-xs sm:text-sm font-extrabold flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-xs active:scale-95 ${
                   activeSection === 'expenses'
                     ? 'bg-black text-white shadow-md border-2 border-black ring-2 ring-black/20'

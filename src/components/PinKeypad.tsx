@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Delete, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { normalizePinInput } from '../lib/authCrypto';
+import { triggerHapticFeedback } from '../utils/haptics';
 
 interface PinKeypadProps {
   pin: string;
@@ -33,10 +34,13 @@ export const PinKeypad: React.FC<PinKeypadProps> = ({
       const normalizedDigit = normalizePinInput(digit);
       if (!normalizedDigit) return;
 
+      triggerHapticFeedback('light');
+
       if (pin.length < maxLength) {
         const nextPin = pin + normalizedDigit;
         onChange(nextPin);
         if (autoSubmitOnComplete && nextPin.length === maxLength && onSubmit) {
+          triggerHapticFeedback('success');
           setTimeout(() => {
             onSubmit(nextPin);
           }, 80);
@@ -48,11 +52,13 @@ export const PinKeypad: React.FC<PinKeypadProps> = ({
 
   const handleBackspace = useCallback(() => {
     if (disabled || pin.length === 0) return;
+    triggerHapticFeedback('light');
     onChange(pin.slice(0, -1));
   }, [disabled, pin, onChange]);
 
   const handleClear = useCallback(() => {
     if (disabled || pin.length === 0) return;
+    triggerHapticFeedback('medium');
     onChange('');
   }, [disabled, pin, onChange]);
 

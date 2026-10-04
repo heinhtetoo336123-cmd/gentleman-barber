@@ -12,6 +12,7 @@ import {
 } from '../utils/notifications';
 import { api } from '../api/client';
 import { playNotificationChime, playSuccessChime } from '../utils/audio';
+import { triggerHapticFeedback } from '../utils/haptics';
 import {
   Scissors,
   Calendar,

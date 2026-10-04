@@ -70,13 +70,11 @@ export async function initializePWAUpdateService(): Promise<ServiceWorkerRegistr
       });
     });
 
-    // 3. Handle controllerchange: When new SW activates and claims clients, reload window once seamlessly
+    // 3. Handle controllerchange: Notify listeners gracefully without forcing rapid mid-boot reloads
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!isRefreshing) {
-        isRefreshing = true;
-        console.log('🔄 New Service Worker active. Reloading window to apply latest version...');
-        window.location.reload();
-      }
+      console.log('ℹ️ Service Worker controller changed. Updates will apply smoothly on next launch.');
+      isUpdateAvailable = true;
+      notifyListeners();
     });
 
     // 4. Proactive Background Update Checks:

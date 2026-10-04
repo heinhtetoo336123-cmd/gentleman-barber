@@ -6,6 +6,7 @@ import { playSuccessChime, playNotificationChime } from '../utils/audio';
 import { formatPrice, sortServicesForClient } from '../utils/formatters';
 import { uploadImageToStorage } from '../utils/imageCompressor';
 import { saveMyBookingId, phonesMatch } from '../utils/notifications';
+import { triggerHapticFeedback } from '../utils/haptics';
 import {
   TIME_SLOTS_12H,
   getLocalTodayStr,
@@ -427,6 +428,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   const handleNextStep = async () => {
     setError('');
+    triggerHapticFeedback('medium');
     if (step === 1) {
       if (selectedServices.length === 0) {
         setError(lang === 'my' ? 'ကျေးဇူးပြု၍ အနည်းဆုံး ဝန်ဆောင်မှုတစ်ခု ရွေးချယ်ပါ' : 'Please select at least one service.');
@@ -475,6 +477,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   const prevStep = () => {
     setError('');
+    triggerHapticFeedback('light');
     if (step === 3 && isPreselectedBarber) {
       // If barber was preselected, back goes straight to step 1
       setStep(1);
@@ -616,6 +619,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
       setCreatedBooking(booking);
       playSuccessChime();
+      triggerHapticFeedback('success');
       try {
         onBookingSuccess(booking);
       } catch (succErr) {

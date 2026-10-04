@@ -2,9 +2,10 @@
 const SW_VERSION = 'v-2026.10.04-offline';
 const CACHE_NAME = `gentlemen-cache-${SW_VERSION}`;
 
-// Precache essential static assets
+// Precache essential static assets & Offline App Shell
 const STATIC_ASSETS = [
   '/',
+  '/index.html',
   '/manifest.json',
   '/favicon.ico',
   '/icon-192.png',
@@ -25,7 +26,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('Precache partial warning:', err);
+        console.warn('Precache partial note:', err);
       });
     })
   );
@@ -52,12 +53,12 @@ self.addEventListener('activate', (event) => {
 });
 
 // Fetch Strategy:
-// 1. For HTML/Navigation requests -> Always Network First, fallback to cached index.html only if completely offline
-// 2. For static assets (JS/CSS) -> Cache First with strict MIME validation to prevent HTML poisoning
+// 1. For HTML/Navigation requests -> Network First with immediate Offline App Shell fallback (/index.html)
+// 2. For static assets (JS/CSS/Images/Fonts) -> Stale-While-Revalidate / Cache First with strict MIME validation
 self.addEventListener('fetch', (event) => {
   const request = event.request;
 
-  // Ignore non-GET requests or Firebase / API calls
+  // Ignore non-GET requests or Firebase / external API calls
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
 
@@ -72,23 +73,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML Navigation Requests -> Network First (fresh server version), fallback to cache only if network fails
+  // HTML Navigation Requests -> Network First, with guaranteed offline fallback to /index.html (zero white crash screens)
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
       fetch(request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone.clone());
+              cache.put('/index.html', responseClone);
+            });
           }
           return networkResponse;
         })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html')))
+        .catch(() => {
+          return caches.match(request).then((cached) => cached || caches.match('/index.html') || caches.match('/'));
+        })
     );
     return;
   }
 
-  // Static Assets (JS / CSS / Images)
+  // Static Assets (JS / CSS / Images / Fonts)
   const isJs = url.pathname.endsWith('.js');
   const isCss = url.pathname.endsWith('.css');
 
@@ -106,25 +112,28 @@ self.addEventListener('fetch', (event) => {
         }
       }
 
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+      const fetchPromise = fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const ct = networkResponse.headers.get('content-type') || '';
+            // NEVER cache HTML responses for .js or .css files (which happens when SPA rewrites 404 to index.html)
+            if (isJs && !ct.includes('javascript')) {
+              return networkResponse;
+            }
+            if (isCss && !ct.includes('css')) {
+              return networkResponse;
+            }
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          // If network failed and we have no cached response, fallback to offline shell if it was a script/asset request
+          return cachedResponse;
+        });
 
-      return fetch(request).then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const ct = networkResponse.headers.get('content-type') || '';
-          // NEVER cache HTML responses for .js or .css files (which happens when SPA rewrites 404 to index.html)
-          if (isJs && !ct.includes('javascript')) {
-            return networkResponse;
-          }
-          if (isCss && !ct.includes('css')) {
-            return networkResponse;
-          }
-          const responseClone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
-        }
-        return networkResponse;
-      });
+      return cachedResponse || fetchPromise;
     })
   );
 });

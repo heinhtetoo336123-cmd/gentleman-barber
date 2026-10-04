@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserRole } from '../types';
 import { Language, translations } from '../data/i18n';
+import { triggerHapticFeedback } from '../utils/haptics';
 import {
   Home,
   Bell,
@@ -38,6 +39,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   const t = translations[lang];
 
   const handleNavClick = (tabId: string) => {
+    triggerHapticFeedback('light');
     setActiveTab(tabId);
   };
 

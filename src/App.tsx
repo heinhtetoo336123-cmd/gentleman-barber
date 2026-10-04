@@ -100,12 +100,12 @@ export default function App() {
 
   // Check saved session & language on load and setup subscriptions
   useEffect(() => {
-    // Dismiss app initial splash screen smoothly once React has mounted
-    const splash = document.getElementById('app-init-splash');
+    // Dismiss app initial splash loader smoothly once React has mounted
+    const splash = document.getElementById('app-init-splash') || document.getElementById('initial-loader');
     if (splash) {
       splash.style.opacity = '0';
-      splash.style.transition = 'opacity 0.2s ease-out';
-      setTimeout(() => splash.remove(), 200);
+      splash.style.transition = 'opacity 0.25s ease-out';
+      setTimeout(() => splash.remove(), 260);
     }
 
     // Language preference (Default to 'en')
