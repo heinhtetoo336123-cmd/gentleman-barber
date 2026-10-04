@@ -8,7 +8,21 @@ interface StatsOverviewProps {
 }
 
 export const StatsOverview: React.FC<StatsOverviewProps> = ({ stats }) => {
-  if (!stats) return null;
+  if (!stats) {
+    return (
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center space-x-3 shadow-2xs animate-pulse">
+            <div className="w-10 h-10 rounded-xl bg-stone-200 shrink-0" />
+            <div className="space-y-2 flex-1">
+              <div className="h-2.5 bg-stone-200 rounded w-16" />
+              <div className="h-5 bg-stone-200 rounded w-20" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

@@ -707,9 +707,13 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
               Total Inflow Revenue
             </span>
             <div className="mt-1">
-              <span className="text-xl font-black font-mono text-white">
-                {formatPrice(stats.totalInflow)}
-              </span>
+              {isLoadingHistory ? (
+                <div className="h-6 w-24 bg-stone-800 animate-pulse rounded my-1" />
+              ) : (
+                <span className="text-xl font-black font-mono text-white">
+                  {formatPrice(stats.totalInflow)}
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-stone-400 font-mono mt-0.5 flex items-center justify-between">
               <span>Cuts: {formatPrice(stats.servicesGross)}</span>
@@ -724,9 +728,13 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
               <Banknote className="w-3.5 h-3.5 text-emerald-700" />
             </div>
             <div className="mt-1">
-              <span className="text-base sm:text-lg font-black font-mono text-emerald-800">
-                {formatPrice(stats.cashTotal)}
-              </span>
+              {isLoadingHistory ? (
+                <div className="h-6 w-20 bg-stone-200 animate-pulse rounded my-1" />
+              ) : (
+                <span className="text-base sm:text-lg font-black font-mono text-emerald-800">
+                  {formatPrice(stats.cashTotal)}
+                </span>
+              )}
             </div>
             <span className="text-[10px] text-stone-500 font-mono mt-0.5 block">
               Physical Cash Inflow
@@ -740,9 +748,13 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
               <Smartphone className="w-3.5 h-3.5 text-blue-700" />
             </div>
             <div className="mt-1">
-              <span className="text-base sm:text-lg font-black font-mono text-blue-800">
-                {formatPrice(stats.kpayTotal + stats.waveTotal)}
-              </span>
+              {isLoadingHistory ? (
+                <div className="h-6 w-20 bg-stone-200 animate-pulse rounded my-1" />
+              ) : (
+                <span className="text-base sm:text-lg font-black font-mono text-blue-800">
+                  {formatPrice(stats.kpayTotal + stats.waveTotal)}
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-stone-500 font-mono mt-0.5 flex justify-between">
               <span>KPay: {formatPrice(stats.kpayTotal)}</span>
@@ -757,9 +769,13 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
               <TrendingDown className="w-3.5 h-3.5 text-rose-700" />
             </div>
             <div className="mt-1">
-              <span className="text-base sm:text-lg font-black font-mono text-rose-800">
-                {formatPrice(stats.totalExpenses)}
-              </span>
+              {isLoadingHistory ? (
+                <div className="h-6 w-20 bg-stone-200 animate-pulse rounded my-1" />
+              ) : (
+                <span className="text-base sm:text-lg font-black font-mono text-rose-800">
+                  {formatPrice(stats.totalExpenses)}
+                </span>
+              )}
             </div>
             <span className="text-[10px] text-stone-500 font-mono mt-0.5 block">
               {activeExpenses.length} Expense Records

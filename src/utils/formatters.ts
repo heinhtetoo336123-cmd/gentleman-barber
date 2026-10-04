@@ -76,16 +76,18 @@ export function formatTimeAgo(dateStr: string | number | undefined, lang: 'en' |
 
 /**
  * Calculates dynamic Barber Rating based on:
- * Default 5.0 Stars + 50% weighted blend with customer ratings.
- * Formula: If customer ratings exist: (5.0 * 0.5) + (Average Customer Rating * 0.5) = (5.0 + AvgCustomerRating) / 2
- * If no customer ratings yet: Default 5.0 Stars.
+ * Base Default Rating: 4.8 stars (80% base weight) + Client verified reviews (20% weight).
+ * Formula: Blended Rating = (4.8 * 0.8) + (Average Customer Rating * 0.2)
+ * If no negative ratings (avg >= 4.5), rating is guaranteed never to drop below the default 4.8.
  */
 export function calculateBarberRating(
   designer: { id: string; rating?: number; reviewsCount?: number },
   bookings?: { designerId: string; rating?: number }[]
 ): { rating: number; reviewsCount: number; ratingDisplay: string } {
+  const baseDefault = 4.8;
+
   if (!bookings || bookings.length === 0) {
-    const directRating = designer.rating ?? 5.0;
+    const directRating = Math.max(baseDefault, designer.rating ?? baseDefault);
     const count = designer.reviewsCount ?? 0;
     return {
       rating: Number(directRating.toFixed(1)),
@@ -99,7 +101,7 @@ export function calculateBarberRating(
   );
 
   if (ratedBookings.length === 0) {
-    const directRating = designer.rating ?? 5.0;
+    const directRating = Math.max(baseDefault, designer.rating ?? baseDefault);
     return {
       rating: Number(directRating.toFixed(1)),
       reviewsCount: 0,
@@ -109,9 +111,13 @@ export function calculateBarberRating(
 
   const sum = ratedBookings.reduce((acc, curr) => acc + (curr.rating || 5), 0);
   const avgCustomer = sum / ratedBookings.length;
-  // Blend 50% default 5.0 with 50% real customer reviews
-  const blendedRating = (5.0 + avgCustomer) / 2;
-  const rounded = Number(blendedRating.toFixed(1));
+
+  // Exact 80% Base (4.8) + 20% Client Reviews Weight
+  const blendedRating = (baseDefault * 0.8) + (avgCustomer * 0.2);
+  
+  // Guarantee rating does not drop below 4.8 unless there are negative ratings
+  const finalRating = avgCustomer >= 4.5 ? Math.max(baseDefault, blendedRating) : blendedRating;
+  const rounded = Number(finalRating.toFixed(1));
 
   return {
     rating: rounded,

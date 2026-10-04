@@ -1759,13 +1759,12 @@ export const api = {
     try {
       const q = query(
         collection(db, 'bookings'),
-        where('customerPhone', '==', phone.trim()),
-        limit(20)
+        limit(150)
       );
       const snap = await getDocs(q);
       const fetched = snap.docs
         .map(parseBookingDoc)
-        .filter(b => !(b as any).isDeleted);
+        .filter(b => !(b as any).isDeleted && phonesMatch(b.customerPhone, phone));
 
       const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
       const idMap = new Map<string, Booking>();
@@ -1779,17 +1778,63 @@ export const api = {
       return fetched;
     } catch (e) {
       console.warn('getClientBookingsFromCloud warning:', e);
-      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+      return cached.filter(b => phonesMatch(b.customerPhone, phone));
     } finally {
       releaseFetchLock();
     }
   },
 
   /**
+   * Dedicated Barber Bookings Query:
+   * Retrieves all bookings & walk-ins assigned to this specific barber from 'barber-db'
+   */
+  async getBookingsForBarber(
+    designerId: string,
+    options?: { date?: string; startDate?: string; endDate?: string }
+  ): Promise<Booking[]> {
+    if (!designerId) return [];
+
+    try {
+      let q = query(
+        collection(db, 'bookings'),
+        where('designerId', '==', designerId),
+        limit(150)
+      );
+
+      const snap = await getDocs(q);
+      const fetched = snap.docs
+        .map(parseBookingDoc)
+        .filter(b => !(b as any).isDeleted);
+
+      // Merge into local cache
+      const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const idMap = new Map<string, Booking>();
+      existing.forEach(b => idMap.set(b.id, b));
+      fetched.forEach(b => idMap.set(b.id, b));
+      const merged = sortBookingsMostRecentFirst(Array.from(idMap.values()));
+      setLocalData(LOCAL_BOOKINGS_KEY, merged);
+      notifyLocalSubscribers('bookings', merged);
+
+      // Apply date filtering if requested
+      if (options?.date) {
+        return fetched.filter(b => b.date === options.date);
+      }
+      if (options?.startDate && options?.endDate) {
+        return fetched.filter(b => b.date && b.date >= options.startDate! && b.date <= options.endDate!);
+      }
+
+      return fetched;
+    } catch (e) {
+      console.warn('getBookingsForBarber error:', e);
+      const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      return cached.filter(b => b.designerId === designerId || (b as any).walkinBarberId === designerId);
+    }
+  },
+
+  /**
    * Real-time listener for bookings with Singleton Shared Listener.
    * Emits local cache immediately at 0ms, then keeps local state synchronized in real-time
-   * with a strict limit(20) query to protect against read spikes while ensuring installed apps
-   * receive new bookings instantly without requiring page refresh.
+   * with a robust limit(150) query to ensure all active and historic bookings are present.
    */
   subscribeToBookings(onUpdate: (bookings: Booking[]) => void): () => void {
     // 1. Register in-memory & cross-tab sync listener
@@ -1803,12 +1848,11 @@ export const api = {
     }
 
     // 2. Attach or share the single active Firestore onSnapshot listener
-    // Hard limit(20) ordered by createdAt desc so installed apps receive new bookings instantly
     const releaseListener = retainSharedListener('bookings', () => {
       const q = query(
         collection(db, 'bookings'),
         orderBy('createdAt', 'desc'),
-        limit(20)
+        limit(150)
       );
 
       return onSnapshot(
@@ -1831,7 +1875,7 @@ export const api = {
         },
         (error) => {
           console.warn('subscribeToBookings snapshot index warning, using fallback query:', error);
-          const fallbackQ = query(collection(db, 'bookings'), limit(20));
+          const fallbackQ = query(collection(db, 'bookings'), limit(150));
           return onSnapshot(fallbackQ, (snap) => {
             if (snap.metadata.hasPendingWrites) return;
             const fresh = snap.docs.map(parseBookingDoc);

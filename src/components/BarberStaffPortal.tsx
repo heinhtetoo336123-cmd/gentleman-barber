@@ -255,6 +255,38 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
     });
   }, [liveBookings, activeDesigner]);
 
+  // Loading state for past date timeline queries
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+
+  // Automatically query historical appointments from 'barber-db' when selecting past dates
+  useEffect(() => {
+    if (!activeDesigner) return;
+
+    if (timelinePeriodMode === 'single' && selectedDate === todayStr) {
+      return;
+    }
+
+    setIsLoadingTimeline(true);
+    api.getBookingsForBarber(activeDesigner.id, {
+      date: timelinePeriodMode === 'single' ? selectedDate : undefined,
+      startDate: timelinePeriodMode === 'range' ? timelineStartDate : undefined,
+      endDate: timelinePeriodMode === 'range' ? timelineEndDate : undefined,
+    }).then((fetched) => {
+      if (fetched && fetched.length > 0) {
+        setLiveBookings((prev) => {
+          const map = new Map<string, Booking>();
+          prev.forEach((b) => map.set(b.id, b));
+          fetched.forEach((b) => map.set(b.id, b));
+          return Array.from(map.values());
+        });
+      }
+    }).catch((err) => {
+      console.warn('Error fetching barber timeline bookings:', err);
+    }).finally(() => {
+      setIsLoadingTimeline(false);
+    });
+  }, [activeDesigner, selectedDate, timelinePeriodMode, timelineStartDate, timelineEndDate, todayStr]);
+
   // =========================================================================
   // MONTHLY PERFORMANCE & COMMISSION LEDGER STATE (LOW-READ ARCHITECTURE)
   // =========================================================================
@@ -1405,7 +1437,14 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
                 </span>
               </div>
 
-              {timelineFilteredBookings.length === 0 ? (
+              {isLoadingTimeline ? (
+                <div className="text-center py-12 text-stone-500 space-y-3">
+                  <div className="w-9 h-9 border-3 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                  <p className="text-xs font-mono font-bold text-stone-700">
+                    {lang === 'my' ? 'မှတ်တမ်းများ ရယူနေပါသည်...' : 'Fetching historical records...'}
+                  </p>
+                </div>
+              ) : timelineFilteredBookings.length === 0 ? (
                 <div className="text-center py-12 text-stone-400 space-y-3">
                   <div className="w-12 h-12 rounded-2xl bg-stone-100 text-stone-400 flex items-center justify-center mx-auto">
                     <Calendar className="w-6 h-6" />
