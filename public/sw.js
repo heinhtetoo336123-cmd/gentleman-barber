@@ -1,9 +1,10 @@
 // Service Worker for GENTLEMEN Barber Lounge PWA, Auto-Updates & Web Push
-const SW_VERSION = 'v6.3.0';
+const SW_VERSION = 'v-2026.10.04-offline';
 const CACHE_NAME = `gentlemen-cache-${SW_VERSION}`;
 
-// Precache essential static assets (exclude html/root to prevent stale html caching)
+// Precache essential static assets
 const STATIC_ASSETS = [
+  '/',
   '/manifest.json',
   '/favicon.ico',
   '/icon-192.png',
@@ -19,7 +20,7 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  // Activate new service worker immediately
+  // Activate new service worker immediately (silent auto-update)
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -38,7 +39,7 @@ self.addEventListener('activate', (event) => {
         return Promise.all(
           cacheNames.map((cache) => {
             if (cache !== CACHE_NAME) {
-              console.log('SW: Purging old cache bucket:', cache);
+              console.log('SW: Purging obsolete cache bucket:', cache);
               return caches.delete(cache);
             }
           })
