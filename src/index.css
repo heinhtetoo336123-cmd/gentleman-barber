@@ -49,42 +49,42 @@
 
   /* Safe Area Padding support for iOS Notch & Home Indicator */
   .pt-safe {
-    padding-top: max(16px, env(safe-area-inset-top, 16px));
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
   }
   .pb-safe {
-    padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));
   }
   .pl-safe {
-    padding-left: max(16px, env(safe-area-inset-left, 16px));
+    padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
   }
   .pr-safe {
-    padding-right: max(16px, env(safe-area-inset-right, 16px));
+    padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
   }
   .safe-top {
-    padding-top: max(16px, env(safe-area-inset-top, 16px));
+    padding-top: env(safe-area-inset-top, 0px);
   }
   .safe-bottom {
-    padding-bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  /* Refined PWA Safe Area: Aligns header safely below iPhone notch / status bar */
+  /* Refined PWA Safe Area: Aligns header cleanly with iOS status bar */
   .header-safe-top {
-    padding-top: max(16px, env(safe-area-inset-top, 16px));
-    padding-left: max(16px, env(safe-area-inset-left, 16px));
-    padding-right: max(16px, env(safe-area-inset-right, 16px));
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
   .main-content-top-offset {
-    padding-top: calc(4.25rem + max(16px, env(safe-area-inset-top, 16px)));
+    padding-top: calc(4.25rem + env(safe-area-inset-top, 0px));
   }
 
   @media (display-mode: standalone), (display-mode: fullscreen) {
     .header-safe-top {
-      padding-top: max(16px, env(safe-area-inset-top, 16px)) !important;
-      padding-left: max(16px, env(safe-area-inset-left, 16px)) !important;
-      padding-right: max(16px, env(safe-area-inset-right, 16px)) !important;
+      padding-top: env(safe-area-inset-top, 0.5rem) !important;
+      padding-left: env(safe-area-inset-left, 0px) !important;
+      padding-right: env(safe-area-inset-right, 0px) !important;
     }
     .main-content-top-offset {
-      padding-top: calc(4.5rem + max(16px, env(safe-area-inset-top, 16px))) !important;
+      padding-top: calc(4.5rem + env(safe-area-inset-top, 0.5rem)) !important;
     }
   }
 

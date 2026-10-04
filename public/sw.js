@@ -1,9 +1,9 @@
-// Service Worker for GENTLEMEN Barber Lounge PWA, Auto-Updates & Web Push
-const SW_VERSION = 'v-2026.10.04-offline';
-const CACHE_NAME = `gentlemen-cache-${SW_VERSION}`;
+// Rock-Solid Service Worker for GENTLEMAN Barber Lounge PWA, 100% Offline Capability & Web Push
+const SW_VERSION = 'v-2026.10.04-rocksolid-v2';
+const CACHE_NAME = `gentleman-cache-${SW_VERSION}`;
 
 // Precache essential static assets & Offline App Shell
-const STATIC_ASSETS = [
+const CORE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
@@ -13,21 +13,27 @@ const STATIC_ASSETS = [
   '/icon-maskable-512.png',
   '/apple-touch-icon.png',
   '/apple-touch-icon-180x180.png',
-  '/apple-touch-icon-152x152.png',
-  '/apple-touch-icon-120x120.png',
-  '/apple-touch-icon-precomposed.png',
   '/logo.svg',
   '/logo.png'
 ];
 
 self.addEventListener('install', (event) => {
-  // Activate new service worker immediately (silent auto-update)
+  // Activate new service worker immediately without waiting
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('Precache partial note:', err);
-      });
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // Use allSettled so one missing icon NEVER fails the precaching of index.html & shell!
+      await Promise.allSettled(
+        CORE_ASSETS.map((url) =>
+          fetch(url, { cache: 'no-cache' })
+            .then((res) => {
+              if (res && res.status === 200) {
+                return cache.put(url, res);
+              }
+            })
+            .catch((err) => console.warn(`Precache skipped for ${url}:`, err))
+        )
+      );
     })
   );
 });
@@ -35,34 +41,34 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     Promise.all([
-      // Clean up ALL older cache buckets from previous versions immediately
+      // Clean up old cache buckets
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cache) => {
             if (cache !== CACHE_NAME) {
-              console.log('SW: Purging obsolete cache bucket:', cache);
+              console.log('SW: Purging obsolete cache:', cache);
               return caches.delete(cache);
             }
           })
         );
       }),
-      // Take control of all open client tabs immediately
+      // Immediately take control of all active clients
       self.clients.claim()
     ])
   );
 });
 
 // Fetch Strategy:
-// 1. For HTML/Navigation requests -> Network First with immediate Offline App Shell fallback (/index.html)
-// 2. For static assets (JS/CSS/Images/Fonts) -> Stale-While-Revalidate / Cache First with strict MIME validation
+// 1. Navigation / Document requests -> Network-first, with guaranteed fallback to cached /index.html
+// 2. Local Static Assets (JS, CSS, Images, Fonts) -> Stale-While-Revalidate / Cache-First
 self.addEventListener('fetch', (event) => {
   const request = event.request;
 
-  // Ignore non-GET requests or Firebase / external API calls
+  // Ignore non-GET requests
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
 
-  // Do NOT intercept Firestore, Google APIs, or backend API routes
+  // Do NOT intercept Firestore or Google Auth backend API routes
   if (
     url.pathname.startsWith('/api/') ||
     url.hostname.includes('firestore.googleapis.com') ||
@@ -73,77 +79,79 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // HTML Navigation Requests -> Network First, with guaranteed offline fallback to /index.html (zero white crash screens)
+  // 1. HTML Navigation Requests (Visiting pages, refreshing, or opening PWA while offline)
   if (request.mode === 'navigate' || request.destination === 'document') {
     event.respondWith(
       fetch(request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
-            const responseClone = networkResponse.clone();
+            const copy = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone.clone());
-              cache.put('/index.html', responseClone);
+              cache.put(request, copy.clone());
+              cache.put('/index.html', copy);
             });
           }
           return networkResponse;
         })
-        .catch(() => {
-          return caches.match(request).then((cached) => cached || caches.match('/index.html') || caches.match('/'));
+        .catch(async () => {
+          // Offline fallback: Return cached HTML
+          const cached =
+            (await caches.match(request)) ||
+            (await caches.match('/index.html')) ||
+            (await caches.match('/'));
+          if (cached) return cached;
+          return new Response('<h1>GENTLEMAN Barber Lounge</h1><p>Offline App Shell loading...</p>', {
+            headers: { 'Content-Type': 'text/html' }
+          });
         })
     );
     return;
   }
 
-  // Static Assets (JS / CSS / Images / Fonts)
-  const isJs = url.pathname.endsWith('.js');
-  const isCss = url.pathname.endsWith('.css');
+  // 2. Same-Origin Assets (JS, CSS, Images, Manifest, Icons)
+  if (url.origin === self.location.origin) {
+    const isCodeAsset = url.pathname.endsWith('.js') || url.pathname.endsWith('.css');
 
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      // Strict MIME verification: If cached response is text/html for a JS/CSS file, discard corrupted cache!
-      if (cachedResponse) {
-        const ct = cachedResponse.headers.get('content-type') || '';
-        if (isJs && !ct.includes('javascript')) {
-          caches.open(CACHE_NAME).then((c) => c.delete(request));
-          cachedResponse = null;
-        } else if (isCss && !ct.includes('css')) {
-          caches.open(CACHE_NAME).then((c) => c.delete(request));
-          cachedResponse = null;
-        }
-      }
-
-      const fetchPromise = fetch(request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const ct = networkResponse.headers.get('content-type') || '';
-            // NEVER cache HTML responses for .js or .css files (which happens when SPA rewrites 404 to index.html)
-            if (isJs && !ct.includes('javascript')) {
-              return networkResponse;
-            }
-            if (isCss && !ct.includes('css')) {
-              return networkResponse;
-            }
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        // Validate MIME type to prevent HTML poisoning
+        if (cachedResponse) {
+          const ct = cachedResponse.headers.get('content-type') || '';
+          if (isCodeAsset && ct.includes('text/html')) {
+            caches.open(CACHE_NAME).then((c) => c.delete(request));
+            cachedResponse = null;
           }
-          return networkResponse;
-        })
-        .catch(() => {
-          // If network failed and we have no cached response, fallback to offline shell if it was a script/asset request
-          return cachedResponse;
-        });
+        }
 
-      return cachedResponse || fetchPromise;
-    })
-  );
+        const networkFetch = fetch(request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              const ct = networkResponse.headers.get('content-type') || '';
+              // Do not cache HTML for JS/CSS files
+              if (isCodeAsset && ct.includes('text/html')) {
+                return networkResponse;
+              }
+              const responseClone = networkResponse.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+            }
+            return networkResponse;
+          })
+          .catch(() => {
+            return cachedResponse;
+          });
+
+        return cachedResponse || networkFetch;
+      })
+    );
+  }
 });
 
 // Handle incoming Web Push (FCM / Server Web Push payload)
 self.addEventListener('push', (event) => {
   let data = {
-    title: 'GENTLEMEN BARBER LOUNGE',
-    body: 'သင့်ထံသို့ အသိပေးချက်အသစ် ရောက်ရှိပါသည် (New Notification)',
-    tag: 'gentlemen-notif',
+    title: 'GENTLEMAN BARBERSHOP',
+    body: 'သင့်ထံသို့ အသိပေးချက်အသစ် ရောက်ရှိပါသည်',
+    tag: 'gentleman-notif',
     url: '/',
   };
 
@@ -219,7 +227,7 @@ self.addEventListener('message', (event) => {
       caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k))));
     } else if (event.data.type === 'SHOW_LOCAL_NOTIFICATION') {
       const payload = event.data.payload || {};
-      self.registration.showNotification(payload.title || 'GENTLEMEN LOUNGE', {
+      self.registration.showNotification(payload.title || 'GENTLEMAN BARBERSHOP', {
         body: payload.body || '',
         icon: payload.icon || '/icon-192.png',
         badge: payload.badge || '/icon-192.png',

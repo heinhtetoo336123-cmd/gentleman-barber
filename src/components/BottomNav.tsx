@@ -75,7 +75,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     ];
 
     return (
-      <nav className="fixed bottom-3 inset-x-3 z-40 max-w-md mx-auto pointer-events-none pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed bottom-0 inset-x-0 z-40 max-w-md mx-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none">
         <div className="pointer-events-auto bg-[#FFFFFF]/95 backdrop-blur-xl rounded-2xl p-1.5 shadow-xl border border-[#E4E4E7] flex items-center justify-between relative overflow-hidden">
           {barberNavItems.map((item) => {
             const Icon = item.icon;
@@ -160,7 +160,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     ];
 
     return (
-      <nav className="fixed bottom-3 inset-x-3 sm:hidden z-40 max-w-md mx-auto pointer-events-none pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed bottom-0 inset-x-0 sm:hidden z-40 max-w-md mx-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none">
         <div className="pointer-events-auto bg-[#FFFFFF]/95 backdrop-blur-xl rounded-2xl p-1.5 shadow-xl border border-[#E4E4E7] flex items-center justify-between relative overflow-hidden">
           {superAdminNavItems.map((item) => {
             const Icon = item.icon;
@@ -248,7 +248,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     ];
 
     return (
-      <nav className="fixed bottom-3 inset-x-3 sm:hidden z-40 max-w-md mx-auto pointer-events-none pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed bottom-0 inset-x-0 sm:hidden z-40 max-w-md mx-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none">
         <div className="pointer-events-auto bg-[#FFFFFF]/95 backdrop-blur-xl rounded-2xl p-1.5 shadow-xl border border-[#E4E4E7] flex items-center justify-between relative overflow-hidden">
           {adminNavItems.map((item) => {
             const Icon = item.icon;
@@ -333,7 +333,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   ];
 
   return (
-    <nav className="fixed bottom-3 inset-x-3 sm:hidden z-40 max-w-md mx-auto pointer-events-none pb-[env(safe-area-inset-bottom)]">
+    <nav className="fixed bottom-0 inset-x-0 sm:hidden z-40 max-w-md mx-auto px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pointer-events-none">
       <div className="pointer-events-auto bg-[#FFFFFF]/95 backdrop-blur-xl rounded-2xl p-1.5 shadow-xl border border-[#E4E4E7] flex items-center justify-between relative overflow-hidden">
         {userNavItems.map((item) => {
           const Icon = item.icon;

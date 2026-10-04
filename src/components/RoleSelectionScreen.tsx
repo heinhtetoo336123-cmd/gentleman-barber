@@ -437,15 +437,15 @@ User Action Recommendation: ${diagnosticResult.recommendedActionEnglish || 'Sync
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#FAFAFA] text-[#18181B] flex flex-col justify-between px-4 py-4 sm:p-8 font-sans selection:bg-[#D4AF37] selection:text-black overflow-y-auto"
+      className="min-h-screen min-h-[100dvh] w-full bg-[#FAFAFA] text-[#18181B] flex flex-col justify-between px-4 sm:px-8 font-sans selection:bg-[#D4AF37] selection:text-black overflow-y-auto"
       style={{
-        paddingTop: 'max(1.25rem, env(safe-area-inset-top, 0px))',
-        paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom, 0px))',
+        paddingTop: 'max(2.5rem, calc(env(safe-area-inset-top, 0px) + 24px))',
+        paddingBottom: 'max(1.25rem, calc(env(safe-area-inset-bottom, 0px) + 16px))',
       }}
     >
       
-      {/* Top: Brand & Lang */}
-      <div className="max-w-md mx-auto w-full flex items-center justify-between">
+      {/* Top: Brand & Lang (Positioned safely below iOS notch & status bar) */}
+      <div className="max-w-md mx-auto w-full flex items-center justify-between shrink-0 mb-3">
         <div 
           onClick={handleLogoSecretTap}
           className="flex items-center space-x-3 cursor-pointer select-none transition-transform active:scale-95"
@@ -487,16 +487,16 @@ User Action Recommendation: ${diagnosticResult.recommendedActionEnglish || 'Sync
       </div>
 
       {/* Center: Client Identification Gate */}
-      <div className="max-w-md mx-auto w-full my-auto text-center space-y-5 py-4">
+      <div className="max-w-md mx-auto w-full flex-1 flex flex-col justify-center my-2 text-center space-y-4 py-2">
         <div className="flex flex-col items-center space-y-2">
           <div
             onClick={handleLogoSecretTap}
             className="cursor-pointer select-none transition-transform active:scale-95 flex flex-col items-center"
             title={activeShopName}
           >
-            <BrandLogo size={84} logoUrl={activeLogoUrl} shopName={activeShopName} tagline={activeTagline} className="mb-1" />
+            <BrandLogo size={80} logoUrl={activeLogoUrl} shopName={activeShopName} tagline={activeTagline} className="mb-1" />
           </div>
-          <h1 className="text-3xl sm:text-4xl font-black text-stone-900 tracking-tight uppercase font-sans">
+          <h1 className="text-2xl sm:text-3xl font-black text-stone-900 tracking-tight uppercase font-sans">
             {activeShopName}
           </h1>
         </div>
