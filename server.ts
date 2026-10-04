@@ -456,7 +456,12 @@ async function startServer() {
       'in-progress': 'ညှပ်ယူနေဆဲ ✂️',
       completed: 'ပြီးစီးခဲ့ပြီး 🎉',
       cancelled: 'ပယ်ဖျက်ခဲ့ပြီး ❌',
-      held: 'ခေတ္တထိန်းထားဆဲ 🔒'
+      held: 'ခေတ္တထိန်းထားဆဲ 🔒',
+      pending_sync: 'လိုင်းစောင့်ဆိုင်းဆဲ 📡',
+      PENDING_SYNC: 'လိုင်းစောင့်ဆိုင်းဆဲ 📡',
+      QUEUED: 'လိုင်းစောင့်ဆိုင်းဆဲ 📡',
+      conflict_slot_taken: 'အချိန်စလော့ တိုက်ဆိုင်နေပါသည် ⚠️',
+      CONFLICT_SLOT_TAKEN: 'အချိန်စလော့ တိုက်ဆိုင်နေပါသည် ⚠️',
     };
 
     let notifTitle = `ဘိုကင်အခြေအနေ အကြောင်းပြန်ချက် (${booking.bookingCode})`;

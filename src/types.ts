@@ -1,6 +1,17 @@
 export type UserRole = 'user' | 'admin' | 'barber' | 'superadmin';
 
-export type BookingStatus = 'pending' | 'confirmed' | 'in-progress' | 'completed' | 'cancelled' | 'held';
+export type BookingStatus = 
+  | 'pending' 
+  | 'confirmed' 
+  | 'in-progress' 
+  | 'completed' 
+  | 'cancelled' 
+  | 'held' 
+  | 'pending_sync' 
+  | 'PENDING_SYNC' 
+  | 'QUEUED' 
+  | 'conflict_slot_taken' 
+  | 'CONFLICT_SLOT_TAKEN';
 
 export type MainCategory = 'Hair Cut' | 'Shampoo' | 'Colour' | 'Perming' | 'Dreadlock';
 

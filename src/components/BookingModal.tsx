@@ -1335,30 +1335,154 @@ export const BookingModal: React.FC<BookingModalProps> = ({
           </div>
         )}
 
-        {/* STEP 5: SUCCESS RECEIPT */}
+        {/* STEP 5: SUCCESS RECEIPT & OFFLINE QUEUED / CONFLICT RESOLUTION */}
         {step === 5 && (createdBooking ? (() => {
+          const isOfflineQueued = 
+            createdBooking.status === 'pending_sync' || 
+            createdBooking.status === 'PENDING_SYNC' || 
+            createdBooking.status === 'QUEUED' ||
+            (typeof navigator !== 'undefined' && !navigator.onLine);
+
+          const isConflict = 
+            createdBooking.status === 'conflict_slot_taken' || 
+            createdBooking.status === 'CONFLICT_SLOT_TAKEN';
+
+          if (isConflict) {
+            // Find other available slots for same date
+            const altSlots = TIME_SLOTS_12H.filter(slot => !lockedSlots.includes(slot) && slot !== createdBooking.timeSlot && !isTimeSlotPassed(slot, createdBooking.date)).slice(0, 6);
+
+            return (
+              <div className="max-w-md mx-auto py-6 px-4 bg-white border border-rose-200 rounded-3xl shadow-lg text-center space-y-4">
+                <div className="w-14 h-14 bg-rose-100 text-rose-700 rounded-2xl flex items-center justify-center mx-auto shadow-2xs">
+                  <AlertCircle className="w-8 h-8 stroke-[2.5]" />
+                </div>
+
+                <div>
+                  <span className="text-[10px] font-bold text-rose-700 uppercase tracking-widest block font-mono">
+                    {lang === 'my' ? 'အချိန်စလော့ တိုက်ဆိုင်နေပါသည်' : 'Slot Already Taken'}
+                  </span>
+                  <h3 className="text-lg font-black text-stone-950 mt-0.5">
+                    {lang === 'my' ? 'အခြား အချိန်စလော့ ရွေးချယ်ပေးပါ' : 'Please Choose Another Time'}
+                  </h3>
+                </div>
+
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-left text-xs text-amber-900 space-y-1">
+                  <p className="font-semibold">
+                    {lang === 'my' 
+                      ? `သင်ရွေးချယ်ထားသော အချိန်စလော့ (${createdBooking.timeSlot}) အား အခြားဧည့်သည်တစ်ဦးမှ ဦးစွာ ရယူသွားပါသဖြင့် အောက်ပါ အခြားရရှိနိုင်သော အချိန်စလော့များထဲမှ တစ်ချက်နှိပ်၍ အလွယ်တကူ ရွေးချယ်ပေးပါရန်။`
+                      : `The requested time slot (${createdBooking.timeSlot}) was just booked by another client. Please select an alternative time below:`}
+                  </p>
+                </div>
+
+                {/* Quick 1-Tap Reschedule Alternative Slots */}
+                {altSlots.length > 0 && (
+                  <div className="space-y-1.5 text-left">
+                    <span className="text-[11px] font-bold text-stone-600 block">
+                      {lang === 'my' ? '⚡️ အသင့်ရရှိနိုင်သော အချိန်များ (One-Tap Reschedule):' : 'Available Slots:'}
+                    </span>
+                    <div className="grid grid-cols-3 gap-2">
+                      {altSlots.map((slot) => (
+                        <button
+                          key={slot}
+                          type="button"
+                          onClick={async () => {
+                            setSelectedTimeSlot(slot);
+                            setLoading(true);
+                            try {
+                              const updated = await api.createBooking({
+                                serviceId: createdBooking.serviceId,
+                                servicesList: createdBooking.servicesList,
+                                designerId: createdBooking.designerId,
+                                customerName: createdBooking.customerName,
+                                customerPhone: createdBooking.customerPhone,
+                                customerEmail: createdBooking.customerEmail,
+                                date: createdBooking.date,
+                                timeSlot: slot,
+                                notes: createdBooking.notes,
+                                paymentMethod: (createdBooking.paymentMethod === 'kpay_wave' || createdBooking.paymentMethod === 'pay_at_shop') ? createdBooking.paymentMethod : 'pay_at_shop',
+                                paymentSlipUrl: createdBooking.paymentSlipUrl,
+                                paymentTxnId: createdBooking.paymentTxnId,
+                                promoCode: createdBooking.promoCode,
+                                discountAmount: createdBooking.discountAmount,
+                              });
+                              setCreatedBooking(updated);
+                              playSuccessChime();
+                            } catch (e) {
+                              setStep(3);
+                            } finally {
+                              setLoading(false);
+                            }
+                          }}
+                          className="py-2 px-1.5 bg-emerald-50 hover:bg-emerald-600 hover:text-white border border-emerald-300 rounded-xl font-mono text-xs font-bold text-emerald-950 transition-all cursor-pointer shadow-2xs active:scale-95 text-center"
+                        >
+                          {slot}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setStep(3)}
+                    className="w-full py-2.5 bg-stone-900 hover:bg-stone-950 text-white font-bold text-xs rounded-xl transition-all cursor-pointer shadow-2xs flex items-center justify-center space-x-1.5"
+                  >
+                    <span>📅</span>
+                    <span>{lang === 'my' ? 'ရက်စွဲ/အချိန် ပြန်လည်ရွေးချယ်မည်' : 'Choose Different Time'}</span>
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div className="max-w-md mx-auto py-6 px-4 bg-white border border-stone-200 rounded-3xl shadow-lg text-center space-y-4">
-              <div className="w-14 h-14 bg-emerald-100 text-emerald-700 rounded-2xl flex items-center justify-center mx-auto shadow-2xs">
-                <Check className="w-8 h-8 stroke-[3]" />
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto shadow-2xs ${
+                isOfflineQueued ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+              }`}>
+                {isOfflineQueued ? <Clock className="w-8 h-8 stroke-[2.5]" /> : <Check className="w-8 h-8 stroke-[3]" />}
               </div>
 
               <div>
-                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest block font-mono">
-                  {lang === 'my' ? 'ဘိုကင်အောင်မြင်ပါသည်' : 'Booking Confirmed'}
+                <span className={`text-[10px] font-bold uppercase tracking-widest block font-mono ${
+                  isOfflineQueued ? 'text-amber-700' : 'text-emerald-700'
+                }`}>
+                  {isOfflineQueued 
+                    ? (lang === 'my' ? 'PENDING SYNC (စက်ထဲတွင် သိမ်းဆည်းထားပါသည်)' : 'PENDING SYNC / QUEUED')
+                    : (lang === 'my' ? 'ဘိုကင်အောင်မြင်ပါသည်' : 'Booking Confirmed')}
                 </span>
                 <h3 className="text-xl font-black text-stone-950 mt-0.5">
                   {lang === 'my' ? 'ကျေးဇူးတင်ပါသည်' : 'Thank You!'}
                 </h3>
               </div>
 
+              {/* Offline Alert Banner */}
+              {isOfflineQueued && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-2xl text-left text-xs text-amber-950 space-y-1">
+                  <div className="flex items-center space-x-1.5 font-bold text-amber-900">
+                    <Clock className="w-4 h-4 shrink-0 text-amber-700" />
+                    <span>{lang === 'my' ? 'အင်တာနက်လိုင်းမရှိသေးပါ' : 'Offline Notice'}</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-900/90 font-medium">
+                    {lang === 'my' 
+                      ? 'လတ်တလော အင်တာနက်လိုင်းမရှိသေးပါသဖြင့် သင်၏ Booking ကို စက်ထဲတွင် ခေတ္တသိမ်းဆည်းထားပါသည်။ လိုင်းရရှိပါက ဆိုင်ဘက်မှ အချိန်စလော့ အတည်ပြုပေးပါမည်။'
+                      : 'You are currently offline. Your booking has been saved locally and will automatically synchronize once your connection is restored.'}
+                  </p>
+                </div>
+              )}
+
               {/* Booking Code Card */}
-              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-2xl space-y-1">
+              <div className={`p-3 rounded-2xl space-y-1 border ${
+                isOfflineQueued ? 'bg-amber-50 border-amber-300' : 'bg-emerald-50 border-emerald-300'
+              }`}>
                 <span className="text-[10px] text-stone-500 font-bold uppercase tracking-wider block">
                   {lang === 'my' ? 'ဘိုကင်ကုဒ်နံပါတ်' : 'Booking Code'}
                 </span>
                 <div className="flex items-center justify-center space-x-2">
-                  <span className="text-lg font-mono font-black text-emerald-950 tracking-wider">
+                  <span className={`text-lg font-mono font-black tracking-wider ${
+                    isOfflineQueued ? 'text-amber-950' : 'text-emerald-950'
+                  }`}>
                     {createdBooking.bookingCode}
                   </span>
                   <button

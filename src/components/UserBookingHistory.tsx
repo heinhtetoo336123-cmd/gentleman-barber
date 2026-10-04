@@ -50,6 +50,41 @@ const statusBadgeConfig: Record<string, { label: string; bg: string; text: strin
     border: 'border-emerald-300',
     icon: Clock,
   },
+  pending_sync: {
+    label: 'Offline Queued (Pending Sync)',
+    bg: 'bg-amber-50',
+    text: 'text-amber-900 font-bold',
+    border: 'border-amber-300',
+    icon: Clock,
+  },
+  PENDING_SYNC: {
+    label: 'Offline Queued (Pending Sync)',
+    bg: 'bg-amber-50',
+    text: 'text-amber-900 font-bold',
+    border: 'border-amber-300',
+    icon: Clock,
+  },
+  QUEUED: {
+    label: 'Queued',
+    bg: 'bg-amber-50',
+    text: 'text-amber-900 font-bold',
+    border: 'border-amber-300',
+    icon: Clock,
+  },
+  conflict_slot_taken: {
+    label: 'Slot Conflict (Reschedule Needed)',
+    bg: 'bg-orange-50',
+    text: 'text-orange-900 font-bold',
+    border: 'border-orange-300',
+    icon: AlertTriangle,
+  },
+  CONFLICT_SLOT_TAKEN: {
+    label: 'Slot Conflict (Reschedule Needed)',
+    bg: 'bg-orange-50',
+    text: 'text-orange-900 font-bold',
+    border: 'border-orange-300',
+    icon: AlertTriangle,
+  },
   completed: {
     label: 'Completed',
     bg: 'bg-emerald-100',
@@ -142,7 +177,17 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
   const myBookings = getClientBookings(bookings, activeClientPhone);
 
   const myFilteredBookings = myBookings.filter((b) => {
-    if (filter === 'upcoming') return b.status === 'confirmed' || b.status === 'pending';
+    if (filter === 'upcoming') {
+      return (
+        b.status === 'confirmed' ||
+        b.status === 'pending' ||
+        b.status === 'pending_sync' ||
+        b.status === 'PENDING_SYNC' ||
+        b.status === 'QUEUED' ||
+        b.status === 'conflict_slot_taken' ||
+        b.status === 'CONFLICT_SLOT_TAKEN'
+      );
+    }
     if (filter === 'completed') return b.status === 'completed';
     if (filter === 'cancelled') return b.status === 'cancelled';
     return true;

@@ -1999,6 +1999,9 @@ export const api = {
       }
     }
 
+    const isDeviceOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const initialStatus: BookingStatus = isDeviceOffline ? 'pending_sync' : 'pending';
+
     const newBooking: Booking = {
       id: bookingId,
       bookingCode: `GTM-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -2017,7 +2020,7 @@ export const api = {
       date: bookingData.date,
       timeSlot: bookingData.timeSlot,
       notes: (bookingData.notes || '').trim(),
-      status: 'pending',
+      status: initialStatus,
       paymentMethod: bookingData.paymentMethod || 'pay_at_shop',
       paymentTxnId: bookingData.paymentTxnId || '',
       paymentSlipUrl: bookingData.paymentSlipUrl || '',
@@ -2029,12 +2032,67 @@ export const api = {
       createdAt: now,
       updatedAt: now,
       statusHistory: [
-        { status: 'pending', timestamp: now, note: 'Request submitted by client' }
+        { 
+          status: initialStatus, 
+          timestamp: now, 
+          note: isDeviceOffline 
+            ? 'Saved offline in local queue - will sync and claim slot when online' 
+            : 'Request submitted by client' 
+        }
       ]
     };
 
+    if (isDeviceOffline) {
+      // Save in offline sync queue
+      try {
+        const queue = getLocalData<Booking[]>('baba_offline_booking_queue', []);
+        setLocalData('baba_offline_booking_queue', [newBooking, ...queue.filter(b => b.id !== bookingId)]);
+      } catch {}
+      saveMyBookingId(newBooking.id, newBooking.bookingCode, newBooking.customerPhone);
+      const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+      const updated = [newBooking, ...current.filter(b => b.id !== bookingId)];
+      setLocalData(LOCAL_BOOKINGS_KEY, updated);
+      notifyLocalSubscribers('bookings', updated);
+      return newBooking;
+    }
+
     try {
-      await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
+      // SERVER-SIDE ATOMIC TRANSACTION SLOT CLAIM:
+      // Verify slot availability atomically to prevent double-booking
+      let slotConflict = false;
+      try {
+        await runTransaction(db, async (transaction) => {
+          const slotQuery = query(
+            collection(db, 'bookings'),
+            where('designerId', '==', finalDesignerId),
+            where('date', '==', bookingData.date),
+            where('timeSlot', '==', bookingData.timeSlot),
+            limit(10)
+          );
+          const snap = await getDocs(slotQuery);
+          for (const d of snap.docs) {
+            const data = d.data();
+            if (d.id !== bookingId && ['pending', 'confirmed', 'in-progress', 'completed'].includes(data.status)) {
+              slotConflict = true;
+              throw new Error('DUAL_BOOKING_SLOT_CONFLICT');
+            }
+          }
+          const bookingRef = doc(db, 'bookings', bookingId);
+          transaction.set(bookingRef, sanitizeForFirestore(newBooking));
+        });
+      } catch (txErr: any) {
+        if (slotConflict || (txErr && txErr.message === 'DUAL_BOOKING_SLOT_CONFLICT')) {
+          newBooking.status = 'conflict_slot_taken';
+          newBooking.notes = (newBooking.notes ? newBooking.notes + ' ' : '') + '[SLOT_CONFLICT: Chosen slot was taken by another user]';
+          const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+          setLocalData(LOCAL_BOOKINGS_KEY, [newBooking, ...current.filter(b => b.id !== bookingId)]);
+          notifyLocalSubscribers('bookings', [newBooking, ...current.filter(b => b.id !== bookingId)]);
+          return newBooking;
+        }
+        // Fallback standard write if transaction had transient error
+        await setDoc(doc(db, 'bookings', bookingId), sanitizeForFirestore(newBooking));
+      }
+
       await this.upsertBookingIntoDayLedger(newBooking);
 
       // Create Notification for Admin
@@ -2124,6 +2182,84 @@ export const api = {
     }
 
     return newBooking;
+  },
+
+  async syncQueuedOfflineBookings(): Promise<{ synced: number; conflicts: number }> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { synced: 0, conflicts: 0 };
+    }
+    const queue = getLocalData<Booking[]>('baba_offline_booking_queue', []);
+    if (queue.length === 0) return { synced: 0, conflicts: 0 };
+
+    let synced = 0;
+    let conflicts = 0;
+    const remainingQueue: Booking[] = [];
+    const allBookings = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
+
+    for (const offlineBk of queue) {
+      try {
+        let isConflict = false;
+        await runTransaction(db, async (transaction) => {
+          const slotQuery = query(
+            collection(db, 'bookings'),
+            where('designerId', '==', offlineBk.designerId),
+            where('date', '==', offlineBk.date),
+            where('timeSlot', '==', offlineBk.timeSlot),
+            limit(10)
+          );
+          const snap = await getDocs(slotQuery);
+          for (const d of snap.docs) {
+            const data = d.data();
+            if (d.id !== offlineBk.id && ['pending', 'confirmed', 'in-progress', 'completed'].includes(data.status)) {
+              isConflict = true;
+              throw new Error('DUAL_BOOKING_SLOT_CONFLICT');
+            }
+          }
+          const validBooking: Booking = {
+            ...offlineBk,
+            status: 'confirmed',
+            updatedAt: new Date().toISOString(),
+            statusHistory: [
+              ...(offlineBk.statusHistory || []),
+              {
+                status: 'confirmed',
+                timestamp: new Date().toISOString(),
+                note: 'Synced from offline queue and atomically confirmed'
+              }
+            ]
+          };
+          const bookingRef = doc(db, 'bookings', offlineBk.id);
+          transaction.set(bookingRef, sanitizeForFirestore(validBooking));
+        });
+
+        // Slot claimed successfully
+        synced++;
+        const updatedBk: Booking = { ...offlineBk, status: 'confirmed' };
+        const idx = allBookings.findIndex(b => b.id === offlineBk.id);
+        if (idx >= 0) allBookings[idx] = updatedBk;
+        else allBookings.unshift(updatedBk);
+        await this.upsertBookingIntoDayLedger(updatedBk);
+      } catch (syncErr: any) {
+        if (syncErr?.message === 'DUAL_BOOKING_SLOT_CONFLICT') {
+          conflicts++;
+          const conflictBk: Booking = {
+            ...offlineBk,
+            status: 'conflict_slot_taken',
+            notes: (offlineBk.notes ? offlineBk.notes + ' ' : '') + '[SLOT_CONFLICT: Offline slot claim conflict]'
+          };
+          const idx = allBookings.findIndex(b => b.id === offlineBk.id);
+          if (idx >= 0) allBookings[idx] = conflictBk;
+          else allBookings.unshift(conflictBk);
+        } else {
+          remainingQueue.push(offlineBk);
+        }
+      }
+    }
+
+    setLocalData('baba_offline_booking_queue', remainingQueue);
+    setLocalData(LOCAL_BOOKINGS_KEY, allBookings);
+    notifyLocalSubscribers('bookings', allBookings);
+    return { synced, conflicts };
   },
 
   async createWalkinBooking(walkinData: {
@@ -5173,3 +5309,17 @@ export const api = {
     return { purgedCount, success: true };
   }
 };
+
+// Automatic Network Restoration Sync for Offline Queued Bookings
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.log('🌐 Network online detected. Triggering offline bookings synchronization...');
+    api.syncQueuedOfflineBookings().catch((err) => console.warn('Offline sync background error:', err));
+  });
+
+  setTimeout(() => {
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      api.syncQueuedOfflineBookings().catch(() => {});
+    }
+  }, 2500);
+}
