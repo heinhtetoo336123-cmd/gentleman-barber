@@ -295,16 +295,16 @@ export function getClientBookings<T extends { id: string; bookingCode?: string; 
   clientPhone?: string
 ): T[] {
   const normPhone = normalizePhoneNumber(clientPhone);
+  const myIds = getMyBookingIds(clientPhone);
 
   const filtered = (allBookings || []).filter((b) => {
-    // If clientPhone is known, only match bookings that match clientPhone!
-    if (normPhone && normPhone.length >= 7) {
-      return Boolean(b.customerPhone && phonesMatch(b.customerPhone, normPhone));
-    }
-    // If no clientPhone is provided (e.g. anonymous guest), fallback to locally saved IDs
-    const myIds = getMyBookingIds();
+    // 1. Locally saved booking IDs on this device (always preserved)
     if (myIds.has(b.id) || (b.bookingCode && myIds.has(b.bookingCode))) {
       return true;
+    }
+    // 2. Phone match if clientPhone is available
+    if (normPhone && normPhone.length >= 7) {
+      return Boolean(b.customerPhone && phonesMatch(b.customerPhone, normPhone));
     }
     return false;
   });

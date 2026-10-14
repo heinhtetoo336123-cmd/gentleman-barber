@@ -32,6 +32,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { FirestoreQuotaMonitorBadge } from './FirestoreQuotaMonitorBadge';
 
 interface ExecutiveSuperAdminPortalProps {
   lang?: 'en' | 'my';
@@ -528,6 +529,9 @@ export const ExecutiveSuperAdminPortal: React.FC<ExecutiveSuperAdminPortalProps>
           </button>
         </div>
       </header>
+
+      {/* Firestore Quota Monitor & Low-Read Shield Badge */}
+      <FirestoreQuotaMonitorBadge lang={lang} className="print:hidden" />
 
       {/* ============================================================= */}
       {/* TAB 1: RECORD CLEANER (DENSE FINANCIAL ROWS & ATOMIC DELETION) */}

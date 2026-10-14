@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ClientDeleteFinancialModal, FinancialResolutionOption } from './ClientDeleteFinancialModal';
+import { FirestoreQuotaMonitorBadge } from './FirestoreQuotaMonitorBadge';
 
 interface SuperAdminHomeProps {
   bookings: Booking[];
@@ -432,6 +433,9 @@ export const SuperAdminHome: React.FC<SuperAdminHomeProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Firestore Quota Monitor & Low-Read Shield Badge */}
+      <FirestoreQuotaMonitorBadge lang={lang} onRefreshCache={onRefresh} />
 
       {/* SuperAdmin View Tab Switcher */}
       <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 overflow-x-auto">

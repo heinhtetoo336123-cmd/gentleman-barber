@@ -1757,14 +1757,38 @@ export const api = {
     }
 
     try {
-      const q = query(
-        collection(db, 'bookings'),
-        limit(150)
-      );
-      const snap = await getDocs(q);
+      let snap;
+      const cleanDigits = phone.replace(/[^0-9]/g, '');
+      const phoneVariants = Array.from(new Set([
+        phone.trim(),
+        cleanDigits,
+        '0' + cleanDigits.replace(/^959|^0?9/, ''),
+        '09' + cleanDigits.replace(/^959|^0?9/, ''),
+        '+95' + cleanDigits.replace(/^959|^0?9/, ''),
+        '+959' + cleanDigits.replace(/^959|^0?9/, '')
+      ])).filter(p => p.length >= 7);
+
+      try {
+        if (phoneVariants.length > 0) {
+          const qDirect = query(
+            collection(db, 'bookings'),
+            where('customerPhone', 'in', phoneVariants.slice(0, 10)),
+            limit(50)
+          );
+          snap = await getDocs(qDirect);
+        }
+      } catch (whereErr) {
+        console.warn('Direct phone query fallback to limit scan:', whereErr);
+      }
+
+      if (!snap || snap.empty) {
+        const qFallback = query(collection(db, 'bookings'), limit(30));
+        snap = await getDocs(qFallback);
+      }
+
       const fetched = snap.docs
         .map(parseBookingDoc)
-        .filter(b => !(b as any).isDeleted && phonesMatch(b.customerPhone, phone));
+        .filter(b => !(b as any).isDeleted && (phonesMatch(b.customerPhone, phone) || phoneVariants.some(v => phonesMatch(b.customerPhone, v))));
 
       const existing = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
       const idMap = new Map<string, Booking>();
@@ -1851,7 +1875,7 @@ export const api = {
     const releaseListener = retainSharedListener('bookings', () => {
       const q = query(
         collection(db, 'bookings'),
-        limit(1000)
+        limit(100)
       );
 
       return onSnapshot(
@@ -3414,7 +3438,7 @@ export const api = {
 
     // 2. Shared Firestore listener
     const releaseListener = retainSharedListener('clients', () => {
-      const q = query(collection(db, 'clients'), limit(500));
+      const q = query(collection(db, 'clients'), limit(50));
       return onSnapshot(
         q,
         (snap) => {

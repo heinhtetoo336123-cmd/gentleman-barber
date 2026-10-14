@@ -96,8 +96,14 @@ export function calculateBarberRating(
     };
   }
 
+  const desNameLower = ((designer as any).name || '').toLowerCase();
   const ratedBookings = bookings.filter(
-    (b) => b.designerId === designer.id && typeof b.rating === 'number' && b.rating > 0
+    (b) =>
+      (b.designerId === designer.id ||
+       (b as any).walkinBarberId === designer.id ||
+       (desNameLower && (b as any).designerName?.toLowerCase().includes(desNameLower))) &&
+      typeof b.rating === 'number' &&
+      b.rating > 0
   );
 
   if (ratedBookings.length === 0) {

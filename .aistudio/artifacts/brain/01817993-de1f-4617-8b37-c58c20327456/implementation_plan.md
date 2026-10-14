@@ -1,73 +1,59 @@
-# Barber Shop App System Fixes & Optimization Plan
+# Firestore Quota Spike Root Cause Analysis & Superadmin Booking Management Optimization Plan
 
-မင်္ဂလာပါခင်ဗျာ။ လူကြီးမင်း ထောက်ပြစစ်ဆေးခိုင်းထားသော ပြဿနာ (၃) ခုအတွက် အကြောင်းရင်းများနှင့် အသေးစိတ် ပြင်ဆင်မည့် ပလန် ဖြစ်ပါသည် -
-
----
-
-## ၁. Barber Zay Rating မှားယွင်းနေသည့် ပြဿနာ ပြင်ဆင်ရေး
-
-### အကြောင်းရင်း (Root Cause)
-`src/utils/formatters.ts` ရှိ `calculateBarberRating` စနစ်တွင် Default (4.8) ကို ၈၀% ဝေစုနှင့် သုံးစွဲသူပေးသော Rating ကို ၂၀% သာ တွက်ချက်သည့် Artificial Blended Formula `(4.8 * 0.8 + avg * 0.2)` ကို သုံးထားခဲ့သဖြင့် Barber Zay ၏ Review 5 Stars ဖြစ်နေသော်လည်း Rating 4.8 ဟုသာ ပေါ်နေခြင်း ဖြစ်ပါသည်။
-
-### ပြင်ဆင်မည့် နည်းလမ်း (Solution)
-1. **True Average Formula**: `src/utils/formatters.ts` တွင် Artificial Formula ကို ဖယ်ရှားပြီး Review များ၏ တကယ့် **True Mathematical Average** သို့ ပြောင်းလဲမည်။ Review မရှိပါက Firestore Barber Record ၏ Rating ကို ဖော်ပြမည်။
-2. **AI Chat Rating Sync**: `server.ts` နှင့် `AiBookingAssistantModal.tsx` ရှိ Barber Card များတွင် Dynamic Rating `(d.rating || 5.0).toFixed(1)` ဖြင့် ကိုက်ညီစေမည်။
+**အစီအစဉ် အကျဉ်းချုပ် (Executive Summary):**  
+Firestore ရဲ့ Read Quota သုံးစွဲမှု အလွန်အမင်း မြင့်တက်သွားရသည့် အဓိက အကြောင်းရင်းများကို စနစ်အတွင်း စစ်ဆေးတွေ့ရှိရပြီး၊ ၎င်းကို အဆင့်လိုက် ထိန်းချုပ်လျှော့ချပေးမည့် နည်းပညာရပ်ဆိုင်ရာ ဖြေရှင်းချက်များနှင့် Superadmin Booking Audit Hub တည်ဆောက်မည့် ပလန်ကို မြန်မာဘာသာဖြင့် အသေးစိတ် ရေးဆွဲထားပါသည်။
 
 ---
 
-## ၂. ဆိုင်ဖုန်းနံပါတ် ပြင်လိုက်သော်လည်း Chat တွင် မပြောင်းလဲသည့် ပြဿနာ ပြင်ဆင်ရေး
+## ၁။ Firestore Read Spike (25K Reads) ဖြစ်ပွားရသည့် အဓိက အကြောင်းရင်းများ (Root Causes)
 
-### အကြောင်းရင်း (Root Cause)
-`server.ts` နှင့် AI Assistant UI တွင် Hotline ဖုန်းနံပါတ်ကို `09263188228` ဟု Hardcoded ရေးထားခဲ့သဖြင့် Admin Settings မှ ဖုန်းပြောင်းသော်လည်း AI မသိရှိခြင်း ဖြစ်ပါသည်။
+Graph စာရင်းများနှင့် Codebase ၏ Firestore Query များကို စစ်ဆေးတွေ့ရှိချက်များအရ အောက်ပါအချက်များကြောင့် Read Spike ဖြစ်ပွားခဲ့ခြင်းဖြစ်သည်-
 
-### ပြင်ဆင်မည့် နည်းလမ်း (Solution)
-1. **Dynamic Props**: `App.tsx` မှ `shopSettings.shopPhone` ကို `AiBookingAssistantModal` သို့ Prop အဖြစ် ပေးပို့မည်။
-2. **Dynamic Context in Chat**: AI မေးခွန်းမေးသည့် Context နှင့် `server.ts` Intent/Gemini System Prompt တွင် `context.shopPhone` Dynamic Data သုံးစွဲမည်။
+1. **စိစစ်မှုမရှိသော Listener အကြီးစားများ (High-Limit Unconstrained Listeners):**
+   - `subscribeToBookings` တွင် `collection(db, 'bookings')` ကို `limit(1000)` ပြုလုပ်၍ Listening လုပ်ထားခြင်း။
+   - မည်သည့် Customer သို့မဟုတ် Admin အက်ပ်ဖွင့်သည်ဖြစ်စေ တစ်ကြိမ်လျှင် Booking 1,000 အထိ တိုက်ရိုက် Read လုပ်ယူနေသဖြင့် အသုံးပြုသူ အနည်းငယ် အက်ပ်ဖွင့်လိုက်ရုံဖြင့် Read ကိန်းဂဏန်း ထောင်ပေါင်းများစွာ တက်သွားခြင်း။
+   - `clients` collection တွင်လည်း `limit(500)` အထိ တိုက်ရိုက် Snapshot ယူနေခြင်း။
 
----
+2. **နေ့စွဲနှင့် အပိုင်းအခြား မသတ်မှတ်ဘဲ client-side မှ Filter လုပ်ခြင်း (In-Memory Filtering):**
+   - Firestore တွင် Query ဖြင့် စစ်ထုတ်ခြင်း (`where('date', '==', today)`) မလုပ်ဘဲ၊ တစ်ဆိုင်လုံး၏ Booking အဟောင်း/အသစ် အားလုံးကို Read လုပ်ပြီးမှ Frontend JS code ထဲတွင် ရက်စွဲ/Barber မဲစစ်ထုတ်ခြင်း။
 
-## ၃. Client Visits History နှင့် Review များ ပျောက်ဆုံးနေသည့် ပြဿနာ ပြင်ဆင်ရေး (Firebase Data Layer Fix)
+3. **React Component ရွှေ့လျားမှုများတွင် Listener ပြန်လည် ချိတ်ဆက်ခြင်း (Re-subscription Cascades):**
+   - Page / Modal များ အကူးအပြောင်းတွင် `useEffect` dependencies အရ `onSnapshot` listener များ မလိုအပ်ဘဲ ထပ်မံ ချိတ်ဆက်မိခြင်း။
 
-### အကြောင်းရင်း (Root Cause)
-1. **Firestore Query Constraint**: Firestore `query(collection(db, 'bookings'), orderBy('createdAt', 'desc'))` ဖြင့် ယူရာတွင် `createdAt` Field မပါရှိသော (သို့မဟုတ် null ဖြစ်နေသော) ယခင် Data အဟောင်းများ/Walk-in Record များကို Firestore ဘက်မှ Silently Omitting (လုံးဝ ချန်လှပ်) ပြစ်လိုက်ခြင်း ဖြစ်ပါသည်။
-2. **Phone Match Formatting Issue**: Phone Comparisons တွင် Strict Matching (`===`) သုံးထားခဲ့သဖြင့် ဖုန်းနံပါတ် format ကွဲပြားမှုများ (`09...`, `+959...`, `959...`) တွင် Client Visit History / Reviews မချိတ်ဆက်မိခြင်း ဖြစ်ပါသည်။
-
-### ပြင်ဆင်မည့် နည်းလမ်း (Solution)
-1. **Query Optimization**: `subscribeToBookings` တွင် Firestore `orderBy('createdAt')` Constraint ကို ဖယ်ရှားပြီး Client-side JS Sorting သို့ ပြောင်းလဲမည်။ Query Limit ကို 1000 ထိ တိုးမြှင့်မည်။
-2. **Fuzzy Phone Matching**: `ClientManager.tsx` နှင့် `client.ts` တို့တွင် Exact Matching အစား `phonesMatch(...)` Helper Function ကို သုံး၍ Format အမျိုးမျိုးရှိ ဖုန်းနံပါတ်များကို ချိတ်ဆက်ပေးမည်။
+4. **ပင်မ အချက်အလက်များ အားလုံးအတွက် Real-time Listener များဖွင့်ထားခြင်း:**
+   - `services`, `designers`, `promos`, `products`, `expenses` Collection အားလုံးကို Background တွင် Real-time နားထောင်ထားခြင်း။
 
 ---
 
-## ၄. Technical Architecture Diagram
+## ၂။ ဖြေရှင်းမည့် နည်းဗျူဟာများနှင့် ပြင်ဆင်မည့် ပလန် (Proposed Solutions)
 
-```
-┌────────────────────────────────────────────────────────┐
-│                   Admin & Client UI                    │
-│    (App.tsx / ClientManager.tsx / AiBookingModal)     │
-└───────────────────────────┬────────────────────────────┘
-                            │
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-┌───────────────────────────┐ ┌──────────────────────────┐
-│   True Mathematical Avg   │ │   Dynamic Shop Phone     │
-│   Rating (formatters.ts)  │ │   Context (server.ts)    │
-└───────────────────────────┘ └──────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│               Firestore Data Layer Fix                 │
-│  - Remove orderBy('createdAt') to load all bookings    │
-│  - Apply phonesMatch() for accurate history/reviews    │
-└────────────────────────────────────────────────────────┘
-```
+### အဆင့် (၁) - Query Optimization & Pagination (Read လျှော့ချရေး)
+- **Booking Query သတ်မှတ်ချက် ပြင်ဆင်ခြင်း:**
+  - Default အနေဖြင့် **ယနေ့ (Today)** သို့မဟုတ် **နီးစပ်ရာ ၇ ရက်** အတွင်းရှိ Booking များကိုသာ Query (`limit(30)` သို့မဟုတ် `limit(50)`) ဖြင့် ဖတ်ယူမည်။
+  - သမိုင်းကြောင်း (History) booking များကို ကြည့်ရှုလိုမှသာ Cursor-based Pagination (`startAfter`) သို့မဟုတ် `Load More` နှိပ်မှ ဖတ်ယူမည်။
+- **Client & Other Collections Pagination:**
+  - `clients` collection ကို တစ်ခါတည်း ၅၀၀ မဖတ်တော့ဘဲ စာမျက်နှာအလိုက် `limit(20)` ဖြင့် ဖတ်ရှုမည်။
+
+### အဆင့် (၂) - Cache-First Local Hydration Strategy (Local Storage အသုံးချခြင်း)
+- စက်ထဲတွင် သိမ်းဆည်းထားသော Cache ဒေတာကို ပထမဦးစွာ (0ms) ပြသမည်။
+- Firestore မှ ဒေတာအသစ် ပြောင်းလဲမှု ရှိမရှိကို သီးသန့် Hash check သို့မဟုတ် လိုအပ်မှသာ Snapshot ချိတ်မည်။
+- မလိုအပ်သော Collection များ၏ Real-time listening များကို ပိတ်ပြီး `getDoc` / Explicit Refetch ဖြင့် ပြောင်းလဲမည်။
+
+### အဆင့် (၃) - Superadmin Real-Time Quota Monitor & Booking Hub တည်ဆောက်ခြင်း
+- **Superadmin Dashboard** တွင် Firestore Quota အခြေအနေ၊ Active Listeners နှင့် Query Health များကို တိုက်ရိုက် ကြည့်ရှုနိုင်သည့် Audit Badge ထည့်သွင်းမည်။
+- **Optimized Booking Management Drawer/Tab**:
+  - Barber အလိုက်၊ Date အလိုက်၊ Status (Pending/Confirmed/Cancelled) အလိုက် စနစ်တကျ ကန့်သတ်ကြည့်ရှုနိုင်မည်။
+  - Infinite loops မဖြစ်စေရန် ထိန်းချုပ်ထားသော Safe Data Fetching Architecture တည်ဆောက်မည်။
 
 ---
 
-## အကောင်အထည်ဖော်မည့် အဆင့်များ (Implementation Steps)
+## ၃။ အကောင်အထည်ဖော်မည့် အဆင့်များ (Implementation Steps)
 
-1. `src/utils/formatters.ts`: `calculateBarberRating` ကို True Mathematical Average သို့ ပြောင်းလဲမည်။
-2. `src/App.tsx` & `src/components/AiBookingAssistantModal.tsx`: `shopPhone` Dynamic Prop နှင့် AI Context Sync လုပ်မည်။
-3. `server.ts`: Gemini Prompt & Intent Logic တွင် Dynamic Shop Phone သုံးမည်။
-4. `src/api/client.ts`: Firestore `orderBy('createdAt')` ကို ဖယ်ရှား၍ `phonesMatch` ဖြင့် Cache & Stream Filter လုပ်မည်။
-5. `src/components/ClientManager.tsx`: History နှင့် Review List တွဲစပ်ရာတွင် `phonesMatch` ပြောင်းလဲမည်။
-6. `compile_applet` ဖြင့် စနစ် တည်ဆောက်မှုနှင့် အလုပ်လုပ်ပုံကို အတည်ပြု စစ်ဆေးမည်။
+1. **`src/api/client.ts` တွင် Query Limits & Date Filters များပြင်ဆင်ခြင်း:**
+   - `subscribeToBookings` တွင် `where('date', '>=', lowerBound)` သို့မဟုတ် `limit(50)` သို့ လျှော့ချခြင်း။
+2. **`useBookings` & `useClients` Hooks များတွင် Pagination ထည့်သွင်းခြင်း:**
+   - Page အလိုက် ဒေတာဆွဲယူသည့် စနစ်ပြောင်းလဲခြင်း။
+3. **Superadmin UI တွင် Firestore Quota Efficiency Panel တည်ဆောက်ခြင်း:**
+   - Admin များအနေဖြင့် Read အရေအတွက် သက်သာစွာဖြင့် Customer Booking များကို စီမံခန့်ခွဲနိုင်မည်။
+4. **Build & Test Verification:**
+   - Applet Compilation နှင့် Functional Testing ပြုလုပ်၍ Read Spikes မဖြစ်ပေါ်တော့ကြောင်း အတည်ပြုခြင်း။
