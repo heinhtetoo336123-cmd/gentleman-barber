@@ -23,6 +23,7 @@ import { AppUpdateNotifier } from './components/AppUpdateNotifier';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RepairDatabaseModal } from './components/RepairDatabaseModal';
 import { ExecutiveSuperAdminPortal } from './components/ExecutiveSuperAdminPortal';
+import { AiBookingAssistantModal } from './components/AiBookingAssistantModal';
 import { motion, AnimatePresence } from 'motion/react';
 
 import {
@@ -97,6 +98,7 @@ export default function App() {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
   const [isRepairModalOpen, setIsRepairModalOpen] = useState(false);
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
 
   // Check saved session & language on load and setup subscriptions
   useEffect(() => {
@@ -844,6 +846,45 @@ export default function App() {
         onClose={() => setIsRepairModalOpen(false)}
         lang={lang}
         onRepaired={loadAllData}
+      />
+
+      {/* Floating AI Concierge Launcher Button */}
+      {role === 'user' && (
+        <button
+          onClick={() => setIsAiModalOpen(true)}
+          className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-40 bg-white text-stone-900 border border-stone-200 hover:border-emerald-600/60 p-3 sm:px-4 sm:py-3 rounded-2xl shadow-lg flex items-center space-x-2.5 transition-all cursor-pointer active:scale-95 group"
+          title="Ask GENTLEMAN AI Concierge"
+        >
+          <div className="w-8 h-8 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+            <Sparkles className="w-4 h-4 text-emerald-700 animate-pulse group-hover:rotate-12 transition-transform" />
+          </div>
+          <span className="hidden sm:inline font-mono text-xs font-black tracking-wide text-stone-800 group-hover:text-emerald-800">
+            ✨ AI မေးမည် / ဘိုကင်တင်မည်
+          </span>
+        </button>
+      )}
+
+      {/* AI Interactive Booking Concierge Modal */}
+      <AiBookingAssistantModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        services={services}
+        designers={designers}
+        lang={lang}
+        shopPhone={shopSettings?.shopPhone || '09263188228'}
+        initialName={(() => {
+          try {
+            const stored = localStorage.getItem('baba_user_profile');
+            return stored ? JSON.parse(stored).name || '' : '';
+          } catch { return ''; }
+        })()}
+        initialPhone={(() => {
+          try {
+            const stored = localStorage.getItem('baba_user_profile');
+            return stored ? JSON.parse(stored).phone || '' : '';
+          } catch { return ''; }
+        })()}
+        onBookingCreated={handleBookingSuccess}
       />
 
     </div>

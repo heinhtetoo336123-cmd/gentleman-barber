@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, collection, query, where, getDocs, limit } from "firebase/firestore";
 import { Service, Designer, Booking, NotificationItem, BookingStatus, AppStats, PaymentSettings, UserProfile, PromoCode } from "./src/types.js";
@@ -136,6 +137,372 @@ async function startServer() {
     res.json({ status: "ok", appName: "BABASHOP Booking Engine" });
   });
 
+  // Helpers to strictly match requested service & designer from user input
+  function findBestMatchingService(msg: string, servicesList: Service[]): Service | null {
+    if (!servicesList || servicesList.length === 0) return null;
+    const lower = (msg || '').toLowerCase().trim();
+
+    let bestMatch: Service | null = null;
+    let bestScore = 0;
+
+    for (const s of servicesList) {
+      const sNameLower = (s.name || '').toLowerCase();
+      let score = 0;
+
+      if (lower.includes(sNameLower)) {
+        score += 100 + sNameLower.length;
+      }
+
+      const words = sNameLower.split(/[\s+\-/,&]+/);
+      for (const word of words) {
+        if (word.length >= 3 && lower.includes(word)) {
+          score += 20;
+        }
+      }
+
+      if ((lower.includes('ဆံပင်ညှပ်') || lower.includes('ညှပ်')) && (sNameLower.includes('haircut') || sNameLower.includes('cut'))) score += 30;
+      if ((lower.includes('လျှော်') || lower.includes('ခေါင်းလျှော်')) && (sNameLower.includes('shampoo') || sNameLower.includes('wash'))) score += 30;
+      if ((lower.includes('ဆေးဆိုး') || lower.includes('ဆေး')) && (sNameLower.includes('color') || sNameLower.includes('dye'))) score += 30;
+      if ((lower.includes('ပါမ်') || lower.includes('ကောက်')) && (sNameLower.includes('perm') || sNameLower.includes('wave'))) score += 30;
+      if ((lower.includes('မျက်နှာ') || lower.includes('ဖရှယ်')) && (sNameLower.includes('facial') || sNameLower.includes('treatment'))) score += 30;
+      if ((lower.includes('မုတ်ဆိတ်') || lower.includes('ပါးသိုင်း')) && (sNameLower.includes('beard') || sNameLower.includes('shave'))) score += 30;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = s;
+      }
+    }
+
+    return bestScore > 0 ? bestMatch : servicesList[0];
+  }
+
+  function findBestMatchingDesigner(msg: string, designersList: Designer[]): Designer | null {
+    if (!designersList || designersList.length === 0) return null;
+    const lower = (msg || '').toLowerCase().trim();
+
+    let bestMatch: Designer | null = null;
+    let bestScore = 0;
+
+    for (const d of designersList) {
+      const dNameLower = (d.name || '').toLowerCase();
+      let score = 0;
+
+      if (lower.includes(dNameLower)) {
+        score += 100 + dNameLower.length;
+      }
+
+      const words = dNameLower.split(/\s+/);
+      for (const word of words) {
+        if (word.length >= 2 && lower.includes(word)) {
+          score += 20;
+        }
+      }
+
+      if ((lower.includes('zay') || lower.includes('ဇေ')) && (dNameLower.includes('zay') || dNameLower.includes('ဇေ'))) score += 50;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = d;
+      }
+    }
+
+    if (bestScore > 0) return bestMatch;
+    const zay = designersList.find(d => (d.name || '').toLowerCase().includes('zay'));
+    return zay || designersList[0];
+  }
+
+  // Helper for dynamic Burmese intent responses & booking action cards
+  function getSmartIntentResponse(message: string, servicesList: Service[], designersList: Designer[], context?: any) {
+    const lower = (message || '').toLowerCase();
+    const now = new Date();
+    
+    // Date Parsing
+    let targetDateStr = now.toISOString().split('T')[0];
+    let dateLabel = 'ဒီနေ့';
+    if (lower.includes('မနက်ဖြန်') || lower.includes('tomorrow')) {
+      const tmr = new Date(now);
+      tmr.setDate(now.getDate() + 1);
+      targetDateStr = tmr.toISOString().split('T')[0];
+      dateLabel = 'မနက်ဖြန်';
+    } else if (lower.includes('သဖန်းနေ့') || lower.includes('သဘက်ခါ')) {
+      const aft = new Date(now);
+      aft.setDate(now.getDate() + 2);
+      targetDateStr = aft.toISOString().split('T')[0];
+      dateLabel = 'သဘက်ခါ';
+    }
+
+    // Time Slot Parsing
+    let targetSlot = '04:00 PM';
+    if (lower.includes('၉') || lower.includes('9')) targetSlot = '09:00 AM';
+    else if (lower.includes('၁၀') || lower.includes('10')) targetSlot = '10:00 AM';
+    else if (lower.includes('၁၁') || lower.includes('11')) targetSlot = '11:00 AM';
+    else if (lower.includes('၁၂') || lower.includes('12')) targetSlot = '12:00 PM';
+    else if (lower.includes('၁ နာရီ') || lower.includes('1 နာရီ') || lower.includes('01:00')) targetSlot = '01:00 PM';
+    else if (lower.includes('၂ နာရီ') || lower.includes('2 နာရီ') || lower.includes('02:00')) targetSlot = '02:00 PM';
+    else if (lower.includes('၃ နာရီ') || lower.includes('3 နာရီ') || lower.includes('03:00')) targetSlot = '03:00 PM';
+    else if (lower.includes('၄ နာရီ') || lower.includes('4 နာရီ') || lower.includes('04:00')) targetSlot = '04:00 PM';
+    else if (lower.includes('၅ နာရီ') || lower.includes('5 နာရီ') || lower.includes('05:00')) targetSlot = '05:00 PM';
+    else if (lower.includes('၆ နာရီ') || lower.includes('6 နာရီ') || lower.includes('06:00')) targetSlot = '06:00 PM';
+
+    const rawClientName = context?.customerName || '';
+    const clientName = (rawClientName && !rawClientName.includes('မောင်မောင်')) ? rawClientName : 'Your Name';
+    const clientPhone = context?.customerPhone || '09********';
+
+    // STRICT PURE FIRESTORE DATA: Never fallback to fake/sample items
+    const activeServices = (context?.services && Array.isArray(context.services) && context.services.length > 0)
+      ? context.services
+      : ((servicesList && servicesList.length > 0) ? servicesList : services);
+
+    const activeDesigners = (context?.designers && Array.isArray(context.designers) && context.designers.length > 0)
+      ? context.designers
+      : ((designersList && designersList.length > 0) ? designersList : designers);
+
+    const matchedService = findBestMatchingService(message, activeServices);
+    const matchedDesigner = findBestMatchingDesigner(message, activeDesigners);
+
+    // 1. Booking / Availability Query Intent ("မနက်ဖြန် ၉ နာရီ ရလား", "တင်လို့ရလား", "ဘိုကင်")
+    if (
+      lower.includes('တင်လို့ရ') ||
+      lower.includes('ရမလား') ||
+      lower.includes('ဘိုကင်') ||
+      lower.includes('book') ||
+      lower.includes('တင်မယ်') ||
+      lower.includes('တင်ပေး') ||
+      lower.includes('ယူမယ်') ||
+      lower.includes('ရပါသလား') ||
+      lower.includes('မနက်ဖြန်') ||
+      lower.includes('ဒီနေ့') ||
+      lower.includes('နာရီ')
+    ) {
+      if (!matchedService || !matchedDesigner) {
+        return {
+          reply: `မင်္ဂလာပါ ${clientName} ခင်ဗျာ! 💈 လက်ရှိတွင် Firestore Database ထဲတွင် ဝန်ဆောင်မှု သို့မဟုတ် Barber စာရင်း ထည့်သွင်းထားခြင်း မရှိသေးပါသဖြင့် ဘိုကင် တင်၍ မရသေးပါခင်ဗျာ။ ဆိုင်ရှင်မှ ဝန်ဆောင်မှုနှင့် Barber အချက်အလက်များ ထည့်သွင်းပြီးပါက ဘိုကင် တင်နိုင်ပါပြီခင်ဗျာ။`,
+          interactiveButtons: [
+            { label: '💈 ဝန်ဆောင်မှု ဈေးနှုန်းများ', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+            { label: '✂️ Barber စာရင်း', actionText: 'အခြား barber ရှိလား' },
+            { label: '📍 ဆိုင်လိပ်စာနှင့် Hotline', actionText: 'ဆိုင်လိပ်စာနဲ့ ဖုန်းနံပါတ်' },
+          ]
+        };
+      }
+
+      return {
+        reply: `ဟုတ်ကဲ့ ရပါတယ်ခင်ဗျာ! **${dateLabel} (${targetDateStr}) ${targetSlot}** တွင် **${matchedService.name}** ဝန်ဆောင်မှုကို **${matchedDesigner.name}** ဖြင့် ဘိုကင်တင်ပေးရမလားခင်ဗျာ။\n\nအောက်ပါ အနှစ်ချုပ် ကတ်တွင် အချက်အလက်များ စစ်ဆေးပြီး **'အတည်ပြုပြီး ဘိုကင်တင်မည်'** ကို နှိပ်နိုင်ပါတယ်ခင်ဗျာ:`,
+        suggestedAction: {
+          type: 'booking_confirm',
+          data: {
+            customerName: clientName,
+            customerPhone: clientPhone,
+            serviceName: matchedService.name,
+            serviceId: matchedService.id,
+            designerName: matchedDesigner.name,
+            designerId: matchedDesigner.id,
+            date: targetDateStr,
+            timeSlot: targetSlot,
+            price: matchedService.price || 0,
+          }
+        },
+        interactiveButtons: [
+          { label: '✏️ ဝန်ဆောင်မှု ပြောင်းမည်', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+          { label: '✂️ Barber ပြောင်းမည်', actionText: 'အခြား barber ရှိလား' },
+          { label: '⏰ မနက်ဖြန် အချိန်ပြောင်းမည်', actionText: 'မနက်ဖြန် ၉ နာရီ ဘိုကင်' },
+        ]
+      };
+    }
+
+    // 2. Barbers Query Intent ("အခြား barber ရှိလား", "zay", "ko zay", "barber", "stylist")
+    if (
+      lower.includes('barber') ||
+      lower.includes('stylist') ||
+      lower.includes('ဒီဇိုင်နာ') ||
+      lower.includes('အခြား') ||
+      lower.includes('ဆရာ')
+    ) {
+      if (!activeDesigners || activeDesigners.length === 0) {
+        return {
+          reply: `💈 **GENTLEMAN BARBERSHOP လက်ရှိ Barber စာရင်း:**\n\nလက်ရှိတွင် Firestore Database ထဲ၌ Barber/Stylist စာရင်း ထည့်သွင်းထားခြင်း မရှိသေးပါခင်ဗျာ။`,
+          interactiveButtons: [
+            { label: '💈 ဝန်ဆောင်မှု ဈေးနှုန်းများ', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+            { label: '📍 ဆိုင်လိပ်စာနှင့် Hotline', actionText: 'ဆိုင်လိပ်စာနဲ့ ဖုန်းနံပါတ်' },
+          ]
+        };
+      }
+
+      const stylistsStr = activeDesigners.map((d: any) => `• **${d.name}** (${d.title || 'Barber'}) - Rating: ${d.rating || 4.8}⭐️`).join('\n');
+      const barberButtons = activeDesigners.map((d: any) => ({
+        label: `💈 ${d.name} နှင့် ဘိုကင်ယူမည်`,
+        actionText: `${d.name} ဆရာနဲ့ ဘိုကင် တင်ပေးပါ`,
+      }));
+
+      return {
+        reply: `💈 **GENTLEMAN BARBERSHOP လက်ရှိ Barber စာရင်း (Firestore Live Data):**\n\n${stylistsStr}\n\nမိမိနှစ်သက်ရာ Barber ခလုတ်ကို နှိပ်၍ သို့မဟုတ် အောက်ပါ ရက်စွဲ/အချိန် ပြောကြားပြီး ဘိုကင် တင်နိုင်ပါသည်ခင်ဗျာ။`,
+        interactiveButtons: [
+          ...barberButtons,
+          { label: '💈 ဝန်ဆောင်မှု ဈေးနှုန်းများ', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+          { label: '📅 မနက်ဖြန် ဘိုကင်', actionText: 'မနက်ဖြန် ၉ နာရီ ဘိုကင်' },
+        ]
+      };
+    }
+
+    // 3. Services & Pricing Intent ("စျေး", "price", "ဝန်ဆောင်မှု", "ခေါင်းလျှော်", "ညှပ်")
+    if (
+      lower.includes('စျေး') ||
+      lower.includes('price') ||
+      lower.includes('ဝန်ဆောင်မှု') ||
+      lower.includes('ခေါင်းလျှော်') ||
+      lower.includes('ညှပ်') ||
+      lower.includes('service')
+    ) {
+      if (!activeServices || activeServices.length === 0) {
+        return {
+          reply: `💈 **GENTLEMAN BARBERSHOP ဝန်ဆောင်မှု မာတိကာ:**\n\nလက်ရှိတွင် Firestore Database ထဲ၌ ဝန်ဆောင်မှု စာရင်း ထည့်သွင်းထားခြင်း မရှိသေးပါခင်ဗျာ။`,
+          interactiveButtons: [
+            { label: '✂️ Barber စာရင်း', actionText: 'အခြား barber ရှိလား' },
+            { label: '📍 ဆိုင်လိပ်စာနှင့် Hotline', actionText: 'ဆိုင်လိပ်စာနဲ့ ဖုန်းနံပါတ်' },
+          ]
+        };
+      }
+
+      const catalogStr = activeServices.map((s: any) => `• **${s.name}**: ${(s.price || 0).toLocaleString()} MMK (${s.durationMinutes || 45} min)`).join('\n');
+      const serviceButtons = activeServices.map((s: any) => ({
+        label: `✂️ ${s.name} ဘိုကင်ယူမည်`,
+        actionText: `${s.name} ဝန်ဆောင်မှုအတွက် ဘိုကင် တင်ပေးပါ`,
+      }));
+
+      return {
+        reply: `💈 **GENTLEMAN BARBERSHOP ဝန်ဆောင်မှု ဈေးနှုန်းများ (Firestore Live Data):**\n\n${catalogStr}\n\nလိုလားသော ဝန်ဆောင်မှု ခလုတ်ကို နှိပ်ပါ သို့မဟုတ် ဘိုကင်တင်လိုသည့် အချိန်ကို ပြောပြပေးပါခင်ဗျာ။`,
+        interactiveButtons: [
+          ...serviceButtons,
+          { label: '✂️ Barber စာရင်း ကြည့်မည်', actionText: 'အခြား barber ရှိလား' },
+          { label: '📅 မနက်ဖြန် ဘိုကင်', actionText: 'မနက်ဖြန် ၉ နာရီ ဘိုကင်' },
+        ]
+      };
+    }
+
+    const shopPhoneNum = context?.shopPhone || settings?.shopPhone || "09263188228";
+
+    // 4. Location & Contact Intent ("လိပ်စာ", "ဖုန်း", "location", "address", "phone")
+    if (
+      lower.includes('လိပ်စာ') ||
+      lower.includes('ဖုန်း') ||
+      lower.includes('location') ||
+      lower.includes('address') ||
+      lower.includes('phone')
+    ) {
+      return {
+        reply: `📍 **GENTLEMAN BARBERSHOP လိပ်စာ:**\nမြိတ်မြို့၊ Market Garden (Room No. K7)\n\n📞 **Hotline:** ${shopPhoneNum}\n⏰ **ဆိုင်ဖွင့်ချိန်:** နံနက် ၉:၀၀ မှ ညနေ ၇:၀၀ ထိ`,
+        interactiveButtons: [
+          { label: '💈 ဝန်ဆောင်မှု ဈေးနှုန်းများ', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+          { label: '✂️ Barber စာရင်း', actionText: 'အခြား barber ရှိလား' },
+          { label: '📅 ဘိုကင် တင်မည်', actionText: 'မနက်ဖြန် ၉ နာရီ ဘိုကင်' },
+        ]
+      };
+    }
+
+    // Default Response
+    return {
+      reply: `မင်္ဂလာပါ ${clientName} ခင်ဗျာ! 💈 GTM AGENT မှ ကြိုဆိုပါတယ်။ ဆံပင်ညှပ် ဝန်ဆောင်မှု စေျးနှုန်းများ မေးမြန်းရန် သို့မဟုတ် ရက်စွဲ/အချိန် ပြောကြားပြီး တိုက်ရိုက် ဘိုကင် တင်နိုင်ပါတယ်ခင်ဗျာ။`,
+      interactiveButtons: [
+        { label: '💈 ဝန်ဆောင်မှု ဈေးနှုန်းများ', actionText: 'ဝန်ဆောင်မှု ဈေးနှုန်းများ' },
+        { label: '✂️ Barber စာရင်း', actionText: 'အခြား barber ရှိလား' },
+        { label: '📅 မနက်ဖြန် ၉ နာရီ ဘိုကင်', actionText: 'မနက်ဖြန် ၉ နာရီ ဘိုကင်' },
+        { label: '📍 ဆိုင်လိပ်စာနှင့် Hotline', actionText: 'ဆိုင်လိပ်စာနဲ့ ဖုန်းနံပါတ်' },
+      ]
+    };
+  }
+
+  // Gemini AI Booking Concierge Route
+  app.post("/api/gemini/chat", async (req, res) => {
+    try {
+      const { message, history, context } = req.body;
+      if (!message) {
+        return res.status(400).json({ error: "Message is required" });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      const isKeyValid = apiKey && apiKey.length > 15 && !apiKey.includes('YOUR_KEY') && apiKey !== 'undefined';
+
+      if (!isKeyValid) {
+        const smartRes = getSmartIntentResponse(message, services, designers, context);
+        return res.json(smartRes);
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const activeServices = (context?.services && Array.isArray(context.services) && context.services.length > 0)
+        ? context.services
+        : services;
+
+      const activeDesigners = (context?.designers && Array.isArray(context.designers) && context.designers.length > 0)
+        ? context.designers
+        : designers;
+
+      const shopPhoneNum = context?.shopPhone || settings?.shopPhone || "09263188228";
+
+      const catalogSummary = (activeServices && activeServices.length > 0)
+        ? activeServices.map((s: any) => `• ${s.name}: ${s.price} MMK (${s.durationMinutes} min)`).join('\n')
+        : 'No services listed in Firestore database yet.';
+
+      const stylistsSummary = (activeDesigners && activeDesigners.length > 0)
+        ? activeDesigners.map((d: any) => `• ${d.name} (${d.title || 'Barber'}) - Rating: ${d.rating || 4.8}`).join('\n')
+        : 'No barbers listed in Firestore database yet.';
+
+      const systemInstruction = `You are GTM AGENT, the smart, polite, and helpful AI Concierge for GENTLEMAN BARBERSHOP in Myeik (Market Garden, Room No. K7).
+Your goal is to converse warmly with customers, answer questions about haircuts, services, and pricing strictly using the live Firestore catalog below.
+
+CRITICAL DIRECTIVES:
+1. NEVER INVENT, FABRICATE, OR FALLBACK TO SAMPLE/MOCK SERVICES OR BARBERS. Only use services and barbers explicitly provided in the live catalog below.
+2. If the catalog or barbers list is empty, state clearly that no services/barbers are currently listed in Firestore.
+3. Reply exclusively in polite, clear Burmese (with standard English barbershop terms like Fade Cut, Booking Code where appropriate).
+4. Provide structured, clean replies with bullet points.
+5. Encourage the user to tap interactive action buttons or specify date/time for booking.
+
+LIVE SHOP CATALOG:
+${catalogSummary}
+
+LIVE STYLISTS ROSTER:
+${stylistsSummary}
+
+HOTLINE: ${shopPhoneNum}
+OPENING HOURS: နံနက် ၉:၀၀ မှ ညနေ ၇:၀၀ ထိ (09:00 AM - 07:00 PM)
+ADDRESS: Market Garden (Room No. K7), Myeik.
+`;
+
+      const promptContents = [
+        ...(Array.isArray(history) ? history : []),
+        { role: 'user', parts: [{ text: message }] }
+      ];
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: promptContents as any,
+        config: {
+          systemInstruction,
+          temperature: 0.7,
+        }
+      });
+
+      const replyText = response.text || "💈 GENTLEMAN BARBERSHOP မှ ကြိုဆိုပါတယ်ခင်ဗျာ။ ဆံပင်ညှပ် ဝန်ဆောင်မှုများနှင့် ဘိုကင်အတွက် ကူညီပေးပါရစေ။";
+
+      // Check if message triggers booking action card or interactive buttons
+      const smartRes = getSmartIntentResponse(message, services, designers, context);
+      res.json({
+        reply: replyText,
+        suggestedAction: smartRes.suggestedAction,
+        interactiveButtons: smartRes.interactiveButtons,
+      });
+    } catch (_err) {
+      const smartRes = getSmartIntentResponse(req.body?.message || '', services, designers, req.body?.context);
+      res.json(smartRes);
+    }
+  });
+
   // Services CRUD
   app.get("/api/services", (_req, res) => {
     res.json(services);
@@ -214,7 +581,7 @@ async function startServer() {
       avatarUrl: avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400',
       bio: bio || 'Professional BABASHOP Stylist & Hair Artist.',
       availableDays: availableDays || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
-      workingHours: workingHours || { start: '09:00', end: '18:00' },
+      workingHours: workingHours || { start: '09:00', end: '19:00' },
       featured: true,
     };
     designers.push(newDesigner);

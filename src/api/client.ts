@@ -1749,11 +1749,11 @@ export const api = {
     // Cache hit: If already queried
     const cached = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
     if (loadedClients.has(clientKey)) {
-      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+      return cached.filter(b => phonesMatch(b.customerPhone, phone));
     }
 
     if (!canPerformNetworkFetch() || !tryAcquireFetchLock()) {
-      return cached.filter(b => (b.customerPhone || '').replace(/[^0-9]/g, '').includes(normalized));
+      return cached.filter(b => phonesMatch(b.customerPhone, phone));
     }
 
     try {
@@ -1851,8 +1851,7 @@ export const api = {
     const releaseListener = retainSharedListener('bookings', () => {
       const q = query(
         collection(db, 'bookings'),
-        orderBy('createdAt', 'desc'),
-        limit(150)
+        limit(1000)
       );
 
       return onSnapshot(
@@ -1874,19 +1873,7 @@ export const api = {
           notifyLocalSubscribers('bookings', list);
         },
         (error) => {
-          console.warn('subscribeToBookings snapshot index warning, using fallback query:', error);
-          const fallbackQ = query(collection(db, 'bookings'), limit(150));
-          return onSnapshot(fallbackQ, (snap) => {
-            if (snap.metadata.hasPendingWrites) return;
-            const fresh = snap.docs.map(parseBookingDoc);
-            const current = getLocalData<Booking[]>(LOCAL_BOOKINGS_KEY, []);
-            const idMap = new Map<string, Booking>();
-            current.forEach(b => idMap.set(b.id, b));
-            fresh.forEach(b => idMap.set(b.id, b));
-            const list = sortBookingsMostRecentFirst(Array.from(idMap.values()));
-            setLocalData(LOCAL_BOOKINGS_KEY, list);
-            notifyLocalSubscribers('bookings', list);
-          });
+          console.warn('subscribeToBookings snapshot error:', error);
         }
       );
     });

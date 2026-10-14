@@ -14,7 +14,7 @@ export const DesignerCard: React.FC<DesignerCardProps> = ({ designer, bookings, 
 
   const daysList = Array.isArray(designer.availableDays) ? designer.availableDays : [];
   const startHour = designer.workingHours?.start || '09:00';
-  const endHour = designer.workingHours?.end || '18:00';
+  const endHour = designer.workingHours?.end || '19:00';
 
   const { ratingDisplay, reviewsCount } = calculateBarberRating(designer, bookings);
 

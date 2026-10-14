@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { exportClientsToCsv } from '../utils/exportHelpers';
+import { phonesMatch } from '../utils/notifications';
 import { ImageCropModal } from './ImageCropModal';
 import { ClientDeleteFinancialModal, FinancialResolutionOption } from './ClientDeleteFinancialModal';
 
@@ -406,8 +407,8 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
               {filteredClients.map((client) => {
                 const clientBookings = bookings.filter(
                   (b) =>
-                    b.customerPhone === client.phone ||
-                    b.customerName.toLowerCase() === client.name.toLowerCase()
+                    (b.customerPhone && phonesMatch(b.customerPhone, client.phone)) ||
+                    (b.customerName && b.customerName.toLowerCase().trim() === client.name.toLowerCase().trim())
                 );
                 const clientReviews = clientBookings.filter((b) => b.rating && b.rating > 0);
                 const clientAvgRating =
@@ -655,8 +656,8 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
               {filteredReviews.map((review) => {
                 const clientObj = clients.find(
                   (c) =>
-                    c.phone === review.customerPhone ||
-                    c.name.toLowerCase() === review.customerName.toLowerCase()
+                    (c.phone && review.customerPhone && phonesMatch(c.phone, review.customerPhone)) ||
+                    (c.name && review.customerName && c.name.toLowerCase().trim() === review.customerName.toLowerCase().trim())
                 );
 
                 return (
@@ -887,8 +888,8 @@ export const ClientManager: React.FC<ClientManagerProps> = ({
       {viewingClientDetails && (() => {
         const clientBookings = bookings.filter(
           (b) =>
-            b.customerPhone === viewingClientDetails.phone ||
-            b.customerName.toLowerCase() === viewingClientDetails.name.toLowerCase()
+            (b.customerPhone && phonesMatch(b.customerPhone, viewingClientDetails.phone)) ||
+            (b.customerName && b.customerName.toLowerCase().trim() === viewingClientDetails.name.toLowerCase().trim())
         );
 
         const completedBookings = clientBookings.filter(

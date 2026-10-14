@@ -84,10 +84,10 @@ export function calculateBarberRating(
   designer: { id: string; rating?: number; reviewsCount?: number },
   bookings?: { designerId: string; rating?: number }[]
 ): { rating: number; reviewsCount: number; ratingDisplay: string } {
-  const baseDefault = 4.8;
+  const fallbackRating = designer.rating ?? 5.0;
 
   if (!bookings || bookings.length === 0) {
-    const directRating = Math.max(baseDefault, designer.rating ?? baseDefault);
+    const directRating = Math.max(1, Math.min(5, fallbackRating));
     const count = designer.reviewsCount ?? 0;
     return {
       rating: Number(directRating.toFixed(1)),
@@ -101,7 +101,7 @@ export function calculateBarberRating(
   );
 
   if (ratedBookings.length === 0) {
-    const directRating = Math.max(baseDefault, designer.rating ?? baseDefault);
+    const directRating = Math.max(1, Math.min(5, fallbackRating));
     return {
       rating: Number(directRating.toFixed(1)),
       reviewsCount: 0,
@@ -111,13 +111,7 @@ export function calculateBarberRating(
 
   const sum = ratedBookings.reduce((acc, curr) => acc + (curr.rating || 5), 0);
   const avgCustomer = sum / ratedBookings.length;
-
-  // Exact 80% Base (4.8) + 20% Client Reviews Weight
-  const blendedRating = (baseDefault * 0.8) + (avgCustomer * 0.2);
-  
-  // Guarantee rating does not drop below 4.8 unless there are negative ratings
-  const finalRating = avgCustomer >= 4.5 ? Math.max(baseDefault, blendedRating) : blendedRating;
-  const rounded = Number(finalRating.toFixed(1));
+  const rounded = Number(avgCustomer.toFixed(1));
 
   return {
     rating: rounded,
