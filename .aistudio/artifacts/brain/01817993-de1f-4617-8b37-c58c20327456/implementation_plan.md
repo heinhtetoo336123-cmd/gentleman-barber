@@ -1,33 +1,28 @@
-# Comprehensive App Updates: Service Presets, Client Cropper, Quota-Optimized Reordering & PWA First-Load Fix
+# Full Image Cropping & Original Ratio Preservation Plan
 
-Remove preset image pickers, unify Client Profile avatar editing with `ImageCropModal`, hide technical Auth Token cards, enable category-grouped custom service reordering with Firestore quota savings, and fix false PWA "New Version Available" notifications on first-time device visits.
+Enhance `ImageCropModal` with a dedicated **"Original / Full Image" (မူလအရွယ်အပြည့်)** mode, auto-fitting bounds, and a quick **"Use Full Photo"** button so users can crop or upload 100% of their original photos without aggressive clipping or forced square constraints.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following decisions were confirmed by the user in recent turns and govern this implementation plan:
+> The following decisions govern this cropper upgrade:
 
-- **Confirmed Decision 1**: Completely remove "Choose from Image Presets" options and grids across Add/Edit Service flows so users only upload custom service photos via the native image cropper.
-- **Confirmed Decision 2**: Use the same universal `ImageCropModal` (pitch zoom, drag pan, aspect-ratio toggles, rotation, and compression) for Client Profile avatar photo uploads.
-- **Confirmed Decision 3**: Completely remove technical developer cards ("Client Auth Token & Session", copy token buttons, and debug session panels) from the client-side user profile view, displaying only clean member details (Name, Phone, Tier, Royalty Points).
-- **Confirmed Decision 4**: Allow admins to custom reorder services within each category (e.g., Hair Cut, Shampoo, Colour, Perming, Dreadlock). Persist order updates using lightweight batch field updates for shifted `displayOrder` values only, protecting Firestore write/read quotas.
-- **Confirmed Decision 5 (New)**: Eliminate duplicate or false "New Version Available" notifications on first-time device loads. Fresh device visits will silently load the latest version directly without triggering update modals.
+- **Confirmed Decision 1**: Add an **"Original" (မူလအရွယ်)** aspect ratio preset toggle alongside 1:1, 4:3, and 16:9. In "Original" mode, the cropper automatically matches the exact width-to-height ratio of the loaded image (`img.naturalWidth / img.naturalHeight`).
+- **Confirmed Decision 2**: Add a direct **"Use Full Photo (မူလပုံအပြည့်သုံးမည်)"** action button. This allows users to immediately apply 100% of their original photo without manual alignment or clipping.
+- **Confirmed Decision 3**: Upgrade canvas rendering math so that when "Original" or "Fit" mode is selected, canvas export maps 1:1 to the image's natural dimensions, preventing edge clipping or forced aspect ratio distortion across all upload flows (Client Profile Avatar, Service Catalog, Staff Management).
 
 ---
 
 ## 1. Overview & Core Concept
 
 ### What It Does
-1. **PWA First-Load Silent Auto-Activation**: Corrects Service Worker lifecycle handlers in `src/utils/swUpdate.ts`. On brand new devices with no prior SW controller (`!navigator.serviceWorker.controller`), service worker installation completes silently without setting `isUpdateAvailable = true` or popping up "New Version Available" toasts. Users immediately see the latest app version on first visit without annoying popups.
-2. **Category-Grouped Service Reordering with Quota Efficiency**: Services on client and admin views remain sorted by standard menu categories (Hair Cut first, Shampoo second, Colour third, etc.). Within each category, admins can reorder services using intuitive **Move Up (▲) / Move Down (▼)** controls or sequence ordering.
-   - **Firestore Quota Preservation**: Order updates modify local state instantly and update *only* the specific services whose `displayOrder` index changed in a single, minimal batch update, avoiding costly full-collection rewrites or frequent re-fetches.
-3. **Service Catalog Cleanup**: Strips out preset photo grids and default preset image fallbacks when creating or editing salon services. Service creators upload custom photos, which launch the touch-friendly pitch-zoom image cropper.
-4. **Client Profile Universal Cropper Integration**: Updates `UserProfileView` so avatar uploads open in the universal `ImageCropModal` for pinch-zoom, panning, aspect-ratio adjustments, and cropping before saving (+100 Royalty Points bonus).
-5. **Customer Profile Streamlining**: Purges developer-facing Auth Token and Session debug widgets from `UserProfileView`. Customers see a clean, high-end profile focused on their appointments, member status, phone number, loyalty points, and language/notification settings.
+1. **Original Aspect Ratio Auto-Detection**: When an image is picked, `ImageCropModal` reads its natural dimensions (`naturalWidth` and `naturalHeight`) and defaults or allows switching to an **Original** ratio mode that matches the photo exactly.
+2. **"Use Full Photo" Quick Button**: Users who want their entire un-cropped photo can tap **"Use Full Photo"**. The cropper instantly processes and compresses the full original image without forcing any zoom or crop offsets.
+3. **Viewport Auto-Scaling**: The cropper canvas viewport scales dynamic aspect ratio boxes (landscape, portrait, square) so that 100% of the image bounds remain visible inside the dark overlay bounds.
+4. **Universal Applicability**: Applies across all photo upload tools in the app (Client Profile, Service Catalog, Staff Management, Walk-in Manager).
 
 ### Target Audience & Persona
-- **New & Returning Salon Clients**: Enjoy a smooth first launch without update popups, a structured category-organized service menu, clean member cards, and custom avatar cropping.
-- **Salon Admins**: Easily organize service lists within each category while operating within efficient database usage limits.
+- **Salon Customers & Admins**: Easily upload full-bleed or original aspect ratio photos without losing important parts of their images (e.g. hair styles, wide banners, tall portraits).
 
 ---
 
@@ -35,46 +30,29 @@ Remove preset image pickers, unify Client Profile avatar editing with `ImageCrop
 
 ### Key User Flows
 
-#### A. First-Time Device Launch (Clean PWA Boot)
-1. User opens the app for the first time on a new browser or phone.
-2. Service worker registers and activates in the background without raising false `controllerchange` update events.
-3. User directly sees the newest app content with **zero update toasts** popping up 2 or 3 times.
+#### A. Uploading Full Original Photos
+1. User selects an image file (portrait, landscape, or square).
+2. `ImageCropModal` opens and detects the image's original dimensions.
+3. The top toolbar presents aspect ratio controls: **Original (မူလ)** | **1:1** | **4:3** | **16:9**.
+4. Selecting **Original** fits the crop frame to 100% of the image's natural aspect ratio.
+5. Alternatively, clicking the prominent **"Use Full Photo (မူလပုံအပြည့်)"** button at the bottom immediately exports the full unclipped photo.
 
-#### B. Custom Service Reordering within Category (Admin View)
-1. Admin opens **Service Catalog Manager**.
-2. Services are grouped under their category headers (e.g. ✂️ Hair Cut, 🧴 Shampoo, 🎨 Colour).
-3. Each service item in the list displays quick **Up (▲) / Down (▼)** action buttons within its category block.
-4. Clicking **Up** or **Down** instantly swaps the service's position relative to its neighboring service in the same category.
-5. The UI animates seamlessly using Framer Motion, while a debounced/batch background API call updates `displayOrder` in Firestore for only the affected items.
-
-#### C. Service Image Upload (Service Catalog)
-1. Admin clicks **"Add New Service"** or edits an existing service.
-2. Step 4 displays a clean **"Upload Custom Photo"** dropzone without preset grids.
-3. Selecting an image file opens `ImageCropModal` for zoom, drag, and crop adjustments.
-4. Saving applies the compressed cropped image directly to the service item.
-
-#### D. Client Avatar Cropping & Profile Clean-Up
-1. Client navigates to **"Account & Settings"** (`UserProfileView`).
-2. Client taps the **Camera badge** on their avatar card or the **"Upload photo for +100 PTS"** pill.
-3. The selected image opens in `ImageCropModal` (pinch-zoom, drag-pan, aspect ratios).
-4. Confirming crop updates the avatar and awards +100 Royalty Points with an audio chime and notification toast.
-5. Technical "Client Auth Token & Session" debug card is completely hidden from customer view.
+#### B. Precision Custom Cropping
+1. If the user wants to adjust zoom or position, they can pinch-zoom or drag-pan as usual.
+2. Selecting **Reset (မူလအတိုင်းပြန်စမည်)** resets zoom to 1 and pan to center (`{x:0, y:0}`).
+3. Tapping **Confirm (✓)** crops and compresses the photo cleanly.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-### Decision 1: Service Worker Controller Guard for PWA Updates
-- **Chosen Approach**: In `src/utils/swUpdate.ts`, check `if (!navigator.serviceWorker.controller)` during initial registration and `controllerchange` events. If no controller existed previously, ignore the change as a fresh first-time installation rather than an update.
-- **Why**: Prevents first-time device visits from erroneously triggering the "New Version Available" toast modal and ensures users are never prompted multiple times when opening a fresh app instance.
+### Decision 1: "Original Ratio" State & Dynamic Viewport Calculation
+- **Chosen Approach**: In `ImageCropModal.tsx`, maintain an `isOriginalRatio` boolean state. When enabled, `aspectRatio` dynamically computes as `naturalWidth / naturalHeight`.
+- **Why**: Allows users to preserve the exact proportions of any photo without forcing 1:1 square crops.
 
-### Decision 2: Category-Grouped Ordering & Minimal Firestore Batch Writes
-- **Chosen Approach**: Retain fixed category order (1. Hair Cut, 2. Shampoo, 3. Colour, 4. Perming, 5. Dreadlock) while supporting custom `displayOrder` integers within each category group. When reordering, only write `displayOrder` for the shifted items using `writeBatch()`.
-- **Why**: Minimizes Firestore write operations (2 document updates per swap) to preserve database quota while giving admins full control over service priority within every category.
-
-### Decision 3: Universal Image Crop Modal (`ImageCropModal.tsx`)
-- **Chosen Approach**: Standardize on `ImageCropModal` across all image upload points (Service Catalog, Staff Management, Client Profile).
-- **Why**: Provides a unified, touch-and-mouse cropping experience with pinch-zoom, drag-pan, aspect ratios, and client-side canvas compression.
+### Decision 2: Direct "Use Full Photo" Export Action
+- **Chosen Approach**: Add a dedicated button that bypasses pan/zoom calculations and directly passes the original image element through `compressImageToDataUrl()`.
+- **Why**: Gives users a 1-click fallback to keep their exact photo untouched.
 
 ---
 
@@ -82,73 +60,59 @@ Remove preset image pickers, unify Client Profile avatar editing with `ImageCrop
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                       SALON APP / INITIAL LAUNCH & BOOT                     │
+│                          IMAGE CROP MODAL WORKFLOW                          │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
             ┌──────────────────────────┴──────────────────────────┐
             ▼                                                     ▼
 ┌───────────────────────────────┐                     ┌───────────────────────────────┐
-│     PWA SW Update Manager     │                     │     ServiceCatalogManager     │
-│  - Guard: Check controller    │                     │  - Category-grouped service   │
-│    before setting update flag │                     │    reorder controls (▲/▼)     │
-│  - First load = Silent init   │                     │  - Minimal batch updates      │
-└───────────────────────────────┘                     └───────────────┬───────────────┘
-                                                                      │
-                                                                      ▼
-                                                      ┌───────────────────────────────┐
-                                                      │        UserProfileView        │
-                                                      │  - Clean Member Details Card  │
-                                                      │  - Avatar Camera & Bonus Pill │
-                                                      │  - NO Auth Token / Session UI │
-                                                      └───────────────┬───────────────┘
-                                                                      │
-                                                                      ▼
-                                                      ┌───────────────────────────────┐
-                                                      │       ImageCropModal          │
-                                                      │  - Pinch Zoom & Drag Pan      │
-                                                      │  - Aspect Ratio Controls      │
-                                                      └───────────────────────────────┘
+│     Aspect Ratio Options      │                     │     "Use Full Photo" Button   │
+│  - [Original] (natural W/H)   │                     │  - Directly processes full    │
+│  - [1:1]  [4:3]  [16:9]       │                     │    original image canvas      │
+└───────────────┬───────────────┘                     └───────────────┬───────────────┘
+                │                                                     │
+                └──────────────────────────┬──────────────────────────┘
+                                           │
+                                           ▼
+                            ┌─────────────────────────────┐
+                            │    Canvas Crop Calculation  │
+                            │  - Scales natural dimensions │
+                            │  - Applies rot/zoom/pan     │
+                            │  - Compresses for storage   │
+                            └──────────────┬──────────────┘
+                                           │
+                                           ▼
+                            ┌─────────────────────────────┐
+                            │     onCropComplete Callback │
+                            │  - Updates Profile Avatar /  │
+                            │    Service / Barber Photo   │
+                            └─────────────────────────────┘
 ```
 
-### Component & File Workflows
+### Component Changes in `src/components/ImageCropModal.tsx`
 
-1. **`src/utils/swUpdate.ts`**:
-   - Refactor `initializePWAUpdateService()` and `subscribeToAppUpdates()`.
-   - Add explicit check `hasExistingController = Boolean(navigator.serviceWorker.controller)`. Only flag `isUpdateAvailable = true` if `hasExistingController` is true AND a new worker is waiting or installed over it.
-
-2. **`src/utils/formatters.ts` (`sortServicesForClient`)**:
-   - Update sorting logic to sort first by **Category Priority**, second by **`displayOrder` (ascending)**, and third by **Name (alphabetical tie-breaker)**.
-
-3. **`src/api/client.ts` (`reorderServicesBatch`)**:
-   - Add a lightweight `reorderServicesBatch(updates: { id: string; displayOrder: number }[])` function executing a single `writeBatch()` for changed service IDs only.
-
-4. **`src/components/ServiceCatalogManager.tsx`**:
-   - Add **Move Up / Move Down** reordering handlers per category group.
-   - Update local `displayOrder` state immediately for zero-latency UI updates, then invoke `reorderServicesBatch`.
-   - Ensure all preset photo grids and default preset fallbacks are completely removed.
-
-5. **`src/components/UserProfileView.tsx`**:
-   - Connect photo upload handler (`handlePhotoUpload`) to `ImageCropModal` with pitch-zoom and crop support.
-   - Hide the "Client Auth Token & Session" debug section (lines 563–626) from customer view.
+1. **Natural Dimensions State**: Add `naturalRatio` state captured on `onLoad` of the preview image (`img.naturalWidth / img.naturalHeight`).
+2. **Aspect Ratio Controls**:
+   - Add **"Original" (မူလ)** button to top ratio bar.
+   - Set `aspectRatio` to `naturalRatio` when clicked.
+3. **Full Image Quick Button**:
+   - Render a **"Use Full Photo" (မူလပုံအပြည့်)** button in the footer controls.
+   - Implement `handleUseFullImage()` function that draws the entire `img` on canvas without zoom/pan cutoffs.
+4. **Viewport Bounds Calculation**:
+   - Adjust viewport overlay CSS (`width` and `height`) so portrait (tall) or landscape (wide) original frames scale smoothly inside the 320px viewport without clipping.
 
 ---
 
 ## Verification Plan
 
 ### Automated Build & Lint Check
-- Run `compile_applet` and `lint_applet` to verify TypeScript types and syntax validity.
+- Run `compile_applet` and `lint_applet` to ensure zero compilation or TypeScript errors.
 
 ### Functional Verification
-1. **First-Time Device Visit Test**:
-   - Open app in clean Incognito / new session context.
-   - Verify Service Worker registers silently with **zero "New Version Available" popups**.
-2. **Service Category Reordering**:
-   - Open Service Catalog Manager as Admin.
-   - Under "Hair Cut" category, click **Move Down (▼)** on a service.
-   - Verify item moves down within category and updates client view ordering.
-   - Verify only 2 document writes occur in Firestore.
-3. **Service Catalog Preset Removal**:
-   - Open "Add Service" modal -> Step 4 -> Verify zero preset image choices exist, test custom image upload + cropper.
-4. **Client Profile Avatar & UI Cleanliness**:
-   - Open "Account & Settings" -> Click Avatar Camera icon -> Test pitch-zoom/pan/crop modal.
-   - Verify no Auth Token / Session card is visible in client profile view.
+1. **Full Image Test**:
+   - Select a tall portrait or wide landscape photo.
+   - Click "Original" ratio or "Use Full Photo" -> Verify 100% of the original photo is preserved without missing edges.
+2. **Standard Ratio Test**:
+   - Switch between 1:1, 4:3, 16:9, and Original -> Verify smooth frame transitions and pan/zoom behavior.
+3. **Cross-Component Check**:
+   - Verify Client Profile avatar, Service Catalog, and Staff Management uploads all support the new Full Image mode seamlessly.
