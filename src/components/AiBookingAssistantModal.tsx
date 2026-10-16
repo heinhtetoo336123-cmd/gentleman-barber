@@ -380,6 +380,11 @@ export const AiBookingAssistantModal: React.FC<AiBookingAssistantModalProps> = (
           suggestedAction: data.suggestedAction,
           interactiveButtons: data.interactiveButtons || defaultButtons,
         };
+
+        // Human-like Dynamic Typing Delay based on response text length
+        const typingDelay = Math.min(2600, Math.max(1200, data.reply.length * 22));
+        await new Promise((resolve) => setTimeout(resolve, typingDelay));
+
         setMessages((prev) => [...prev, aiMsg]);
         triggerHapticFeedback('medium');
       } else {
@@ -574,20 +579,20 @@ export const AiBookingAssistantModal: React.FC<AiBookingAssistantModalProps> = (
           {/* Full Screen Header */}
           <div className="px-4 py-3 bg-white border-b border-stone-200 flex items-center justify-between shrink-0 shadow-2xs">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-700 text-white flex items-center justify-center shadow-2xs font-mono font-black text-sm">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-800 text-amber-300 flex items-center justify-center shadow-2xs font-mono font-black text-sm border border-amber-400/30">
                 GTM
               </div>
               <div>
                 <div className="flex items-center space-x-2">
                   <h3 className="font-black text-base uppercase tracking-wider text-stone-900 font-mono">
-                    GTM AGENT
+                    GTM SHOP CONCIERGE
                   </h3>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-[9px] font-mono font-bold">
-                    ONLINE
+                  <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[9px] font-mono font-bold">
+                    RECEPTIONIST
                   </span>
                 </div>
                 <p className="text-[11px] text-stone-500 font-sans font-medium">
-                  {lang === 'my' ? 'GENTLEMAN AI Booking Concierge' : 'GENTLEMAN AI Booking Concierge'}
+                  {lang === 'my' ? 'Gentleman Barbershop ဧည့်ကြို ဝန်ဆောင်မှု' : 'Gentleman Barbershop Shop Concierge'}
                 </p>
               </div>
             </div>
@@ -807,12 +812,18 @@ export const AiBookingAssistantModal: React.FC<AiBookingAssistantModalProps> = (
 
             {loading && (
               <div className="flex items-center space-x-2.5">
-                <div className="w-8 h-8 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 font-mono font-bold text-xs">
+                <div className="w-8 h-8 rounded-xl bg-emerald-800 text-amber-300 border border-amber-400/30 flex items-center justify-center shrink-0 font-mono font-bold text-xs">
                   GTM
                 </div>
-                <div className="bg-white border border-stone-200 rounded-2xl rounded-tl-xs p-3.5 text-xs text-stone-500 flex items-center space-x-2 shadow-2xs">
-                  <div className="w-2 h-2 rounded-full bg-emerald-600 animate-ping" />
-                  <span>{lang === 'my' ? 'GTM AGENT စာပြန်နေပါသည်...' : 'GTM AGENT is typing...'}</span>
+                <div className="bg-white border border-stone-200 rounded-2xl rounded-tl-xs p-3.5 text-xs text-stone-600 flex items-center space-x-2 shadow-2xs font-sans">
+                  <div className="flex space-x-1 items-center">
+                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full animate-bounce" />
+                  </div>
+                  <span className="text-[11px] text-stone-500 font-medium pl-1">
+                    {lang === 'my' ? 'GTM Receptionist စာရိုက်နေသည်...' : 'Concierge typing...'}
+                  </span>
                 </div>
               </div>
             )}

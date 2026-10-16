@@ -25,7 +25,7 @@ export const DesignerCard: React.FC<DesignerCardProps> = ({ designer, bookings, 
       <div className="flex items-start space-x-4">
         <div className="relative shrink-0">
           <img
-            src={designer.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400'}
+            src={designer.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400'}
             alt={designer.name || 'Designer'}
             referrerPolicy="no-referrer"
             className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border-2 border-emerald-100 group-hover:border-emerald-500 transition-colors shadow-xs"

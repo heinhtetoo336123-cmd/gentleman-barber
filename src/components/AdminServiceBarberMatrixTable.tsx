@@ -1238,7 +1238,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                           >
                             <div className="flex items-center space-x-2 min-w-0">
                               <img
-                                src={designer.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                                src={designer.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                                 alt={designer.name}
                                 referrerPolicy="no-referrer"
                                 className="w-6 h-6 rounded-full object-cover border border-emerald-300 shrink-0"
@@ -1293,7 +1293,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                   >
                     <div className="flex items-center space-x-2 min-w-0">
                       <img
-                        src={designer.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                        src={designer.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                         alt={designer.name}
                         referrerPolicy="no-referrer"
                         className="w-7 h-7 rounded-full object-cover border border-emerald-300 shrink-0"
@@ -1363,7 +1363,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                     <th key={designer.id} className="p-3 text-center min-w-[130px]">
                       <div className="flex items-center justify-center space-x-1.5">
                         <img
-                          src={designer.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400'}
+                          src={designer.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400'}
                           alt={designer.name}
                           referrerPolicy="no-referrer"
                           className="w-5 h-5 rounded-full object-cover border border-emerald-300"
@@ -1636,7 +1636,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                 }`}
               >
                 <img
-                  src={designer.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                  src={designer.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                   alt={designer.name}
                   referrerPolicy="no-referrer"
                   className="w-4 h-4 rounded-full object-cover"
@@ -1745,7 +1745,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                     <div className="flex items-center justify-between gap-2 border-b border-stone-100 pb-2.5">
                       <div className="flex items-center space-x-2 min-w-0">
                         <img
-                          src={b.designerAvatar || des?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                          src={b.designerAvatar || des?.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                           alt={b.designerName}
                           referrerPolicy="no-referrer"
                           className="w-7 h-7 rounded-full object-cover border border-emerald-300 shrink-0"
@@ -1936,7 +1936,7 @@ export const AdminServiceBarberMatrixTable: React.FC<AdminServiceBarberMatrixTab
                           <td className="p-3 font-medium text-stone-900">
                             <div className="flex items-center space-x-2">
                               <img
-                                src={b.designerAvatar || des?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                                src={b.designerAvatar || des?.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                                 alt={b.designerName}
                                 referrerPolicy="no-referrer"
                                 className="w-6 h-6 rounded-full object-cover border border-emerald-300 shrink-0"

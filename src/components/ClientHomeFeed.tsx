@@ -95,7 +95,7 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
     : null;
 
   const barberPhone = bookedBarber?.phone || shopSettings?.shopPhone || '09263188228';
-  const barberAvatar = bookedBarber?.avatarUrl || latestBooking?.designerAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400';
+  const barberAvatar = bookedBarber?.avatarUrl || latestBooking?.designerAvatar || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400';
 
   const handleActionClick = (id: string, callback: () => void) => {
     setLoadingActionId(id);

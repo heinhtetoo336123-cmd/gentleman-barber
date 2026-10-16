@@ -560,71 +560,6 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
         </div>
       </div>
 
-      {/* Real Client Login & Auth Token Card */}
-      <div className="bg-white border border-stone-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
-        <div className="flex items-center justify-between border-b border-stone-200 pb-3">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
-              <Shield className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-stone-950 font-mono">
-                {lang === 'my' ? 'လုံခြုံစိတ်ချရသော Client Auth Token' : 'Client Auth Token & Session'}
-              </h3>
-              <p className="text-[10px] text-stone-400 font-mono">Cryptographic Local Token Verification</p>
-            </div>
-          </div>
-          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold font-mono flex items-center space-x-1">
-            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-            <span>Active Session</span>
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div className="p-3 bg-stone-50 border border-stone-200 rounded-2xl space-y-1">
-            <span className="text-[10px] font-mono font-bold text-stone-400 uppercase">Client Token ID</span>
-            <div className="font-mono font-bold text-stone-900 text-xs truncate">
-              {clientSession?.clientId || 'client_auth_ready'}
-            </div>
-          </div>
-
-          <div className="p-3 bg-stone-50 border border-stone-200 rounded-2xl space-y-1">
-            <span className="text-[10px] font-mono font-bold text-stone-400 uppercase">Verified Tier & Phone</span>
-            <div className="font-mono font-bold text-stone-900 text-xs">
-              {profile.memberTier} TIER • {profile.phone || '0000000000'}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleCopyClientToken}
-            className="flex-1 py-2.5 px-3 rounded-xl bg-stone-100 hover:bg-stone-200 border border-stone-200 text-stone-800 text-xs font-bold font-mono flex items-center justify-center space-x-1.5 transition-all cursor-pointer"
-          >
-            {copiedToken ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copiedToken ? (lang === 'my' ? 'Token ကူးယူပြီး' : 'Copied Token') : (lang === 'my' ? 'Client Token ကူးယူမည်' : 'Copy Auth Token')}</span>
-          </button>
-
-          <button
-            onClick={() => {
-              saveClientSession({
-                name: profile.name,
-                phone: profile.phone,
-                memberTier: profile.memberTier,
-                points: profile.points,
-              });
-              setClientSession(getClientSession());
-              alert(lang === 'my' ? 'Client Auth Token အောင်မြင်စွာ Refresh လုပ်ပြီးပါပြီ' : 'Client Auth Token refreshed successfully');
-            }}
-            className="py-2.5 px-3 rounded-xl bg-stone-100 hover:bg-stone-200 border border-stone-200 text-stone-800 text-xs font-bold font-mono flex items-center justify-center space-x-1 transition-all cursor-pointer"
-            title="Refresh Token"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-stone-700" />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
-        </div>
-      </div>
-
       {/* Web Push Notification Settings Card */}
       <div className="bg-white border border-stone-200 rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
         <div className="flex items-center justify-between border-b border-stone-200 pb-3">
@@ -840,7 +775,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
         }}
         onCropComplete={handleCropComplete}
         title={lang === 'my' ? 'ပရိုဖိုင် ဓာတ်ပုံ နေရာညှိပြီး ချုံ့သိမ်းမည် (+100 PTS)' : 'Crop & Auto-Compress Profile Photo (+100 PTS)'}
-        cropShape="circle"
+        cropShape="square"
         outputSize={512}
       />
 

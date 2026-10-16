@@ -843,7 +843,7 @@ export const DailySettlementReport: React.FC<DailySettlementReportProps> = ({
                         <td className="py-3 px-3 whitespace-nowrap">
                           <div className="flex items-center space-x-2.5">
                             <img
-                              src={item.designerAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400'}
+                              src={item.designerAvatar || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400'}
                               alt={item.designerName}
                               referrerPolicy="no-referrer"
                               className="w-8 h-8 rounded-xl object-cover border border-stone-200 shrink-0"

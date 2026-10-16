@@ -19,6 +19,8 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowLeft,
+  ArrowUp,
+  ArrowDown,
   Sparkles,
   Crop,
   CheckCircle,
@@ -33,41 +35,6 @@ interface ServiceCatalogManagerProps {
   initialEditService?: Service | null;
   onClearInitialEditService?: () => void;
 }
-
-export const PRESET_PHOTOS = [
-  {
-    name: 'Fade & Hair Cut',
-    url: 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Scissor Texturing',
-    url: 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Scalp Waterfall Shampoo',
-    url: 'https://images.unsplash.com/photo-1540555700478-4be289fbecef?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Clarifying Shampoo',
-    url: 'https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Creative Colour Art',
-    url: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Korean Perm & Curls',
-    url: 'https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Handcrafted Dreadlocks',
-    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=600',
-  },
-  {
-    name: 'Beard & Hair Combo',
-    url: 'https://images.unsplash.com/photo-1621605815971-fbc98d665033?auto=format&fit=crop&q=80&w=600',
-  },
-];
 
 export const CATEGORIES_CONFIG = [
   { id: 'Hair Cut', label: 'Hair Cut', myLabel: 'ဆံပင်ညှပ်/ပုံသွင်း', icon: '✂️', desc: 'Fade, Scissor Cut, Beard Trim & Style' },
@@ -121,7 +88,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
   const [pointsEarned, setPointsEarned] = useState<number>(50);
   const [displayOrder, setDisplayOrder] = useState<number>(1);
   const [description, setDescription] = useState('');
-  const [imageUrl, setImageUrl] = useState(PRESET_PHOTOS[0].url);
+  const [imageUrl, setImageUrl] = useState('');
   const [popular, setPopular] = useState(false);
   const [active, setActive] = useState(true);
 
@@ -143,7 +110,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
     setPointsEarned(50);
     setDisplayOrder(displayServices.length + 1);
     setDescription('');
-    setImageUrl(PRESET_PHOTOS[0].url);
+    setImageUrl('');
     setPopular(false);
     setActive(true);
     setErrorMsg(null);
@@ -160,7 +127,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
     setPointsEarned(s.pointsEarned ?? 50);
     setDisplayOrder(typeof s.order === 'number' ? s.order : (s.displayOrder || (displayServices.findIndex(item => item.id === s.id) + 1)));
     setDescription(s.description || '');
-    setImageUrl(s.imageUrl || PRESET_PHOTOS[0].url);
+    setImageUrl(s.imageUrl || '');
     setPopular(!!s.popular);
     setActive(s.active !== false);
     setErrorMsg(null);
@@ -265,7 +232,7 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
         order: numOrder,
         displayOrder: numOrder,
         description: description.trim(),
-        imageUrl: imageUrl.trim() || PRESET_PHOTOS[0].url,
+        imageUrl: imageUrl.trim(),
         popular,
         active,
       };
@@ -319,6 +286,43 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
       onRefresh();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleMoveService = async (service: Service, direction: 'up' | 'down') => {
+    const sameCatServices = displayServices.filter((s) => s.category === service.category);
+    const currentIndex = sameCatServices.findIndex((s) => s.id === service.id);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= sameCatServices.length) return;
+
+    const adjacentService = sameCatServices[targetIndex];
+
+    // Swapping order integers - only update 2 shifted items for Firestore quota efficiency!
+    const shiftedUpdates = [
+      { id: service.id, displayOrder: targetIndex + 1 },
+      { id: adjacentService.id, displayOrder: currentIndex + 1 },
+    ];
+
+    const updateMap = new Map(shiftedUpdates.map((u) => [u.id, u.displayOrder]));
+    const newDisplay = sortServicesForClient(
+      displayServices.map((s) => {
+        if (updateMap.has(s.id)) {
+          const newOrder = updateMap.get(s.id)!;
+          return { ...s, displayOrder: newOrder, order: newOrder };
+        }
+        return s;
+      })
+    );
+    setDisplayServices(newDisplay);
+
+    try {
+      await api.reorderServicesBatch(shiftedUpdates);
+      playNotificationChime();
+      showToast('Service position updated');
+    } catch (e) {
+      console.error('Failed to reorder service:', e);
     }
   };
 
@@ -534,11 +538,11 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
 
               {/* Actions */}
               <div className="pt-2 border-t border-emerald-50 flex items-center justify-between">
-                <div className="flex items-center space-x-1">
+                <div className="flex items-center space-x-1.5">
                   <button
                     type="button"
                     onClick={() => toggleActive(service)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border cursor-pointer ${
+                    className={`px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer ${
                       service.active
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                         : 'bg-stone-100 text-stone-500 border-stone-200'
@@ -546,6 +550,26 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                   >
                     {service.active ? 'Active' : 'Disabled'}
                   </button>
+
+                  {/* Reorder Up/Down in Category */}
+                  <div className="flex items-center space-x-0.5 bg-stone-100 p-0.5 rounded-lg border border-stone-200">
+                    <button
+                      type="button"
+                      onClick={() => handleMoveService(service, 'up')}
+                      className="p-1 hover:bg-stone-200 text-stone-700 rounded-md transition-colors cursor-pointer"
+                      title="Move Up in Category"
+                    >
+                      <ArrowUp className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleMoveService(service, 'down')}
+                      className="p-1 hover:bg-stone-200 text-stone-700 rounded-md transition-colors cursor-pointer"
+                      title="Move Down in Category"
+                    >
+                      <ArrowDown className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center space-x-1">
@@ -802,42 +826,11 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                       </div>
                     </div>
 
-                    {/* Presets Grid */}
-                    <div>
-                      <label className="block text-stone-700 text-xs font-bold mb-2">
-                        Or Choose from Presets
-                      </label>
-                      <div className="grid grid-cols-4 gap-2">
-                        {PRESET_PHOTOS.map((p, idx) => {
-                          const isSelected = imageUrl === p.url;
-                          return (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => setImageUrl(p.url)}
-                              className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${
-                                isSelected
-                                  ? 'border-emerald-600 ring-2 ring-emerald-600/30'
-                                  : 'border-stone-200 hover:border-emerald-400 opacity-80 hover:opacity-100'
-                              }`}
-                            >
-                              <img src={p.url} alt={p.name} className="w-full h-full object-cover" />
-                              {isSelected && (
-                                <div className="absolute inset-0 bg-emerald-950/40 flex items-center justify-center text-white">
-                                  <Check className="w-5 h-5 stroke-[3]" />
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
                     {/* Custom Upload with Auto Cropper */}
                     <div className="flex items-center space-x-2 pt-1">
-                      <label className="w-full px-4 py-2.5 bg-white border border-dashed border-emerald-400 hover:border-emerald-600 hover:bg-emerald-50/50 text-emerald-900 rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center space-x-2 transition-colors">
+                      <label className="w-full px-4 py-3 bg-white border-2 border-dashed border-emerald-400 hover:border-emerald-600 hover:bg-emerald-50/50 text-emerald-900 rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center space-x-2 transition-colors">
                         <Upload className="w-4 h-4 text-emerald-700" />
-                        <span>{uploadingImage ? 'Uploading & Cropping...' : 'Upload & Crop Custom Photo'}</span>
+                        <span>{uploadingImage ? 'Uploading & Cropping...' : 'Upload Photo & Crop (Native Editor)'}</span>
                         <input
                           type="file"
                           accept="image/*"

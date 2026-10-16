@@ -15,6 +15,7 @@ import {
 import { playSuccessChime, playNotificationChime } from '../utils/audio';
 import { uploadImageToStorage } from '../utils/imageCompressor';
 import { formatPrice } from '../utils/formatters';
+import { ImageCropModal } from './ImageCropModal';
 import {
   Shield,
   KeyRound,
@@ -23,6 +24,7 @@ import {
   UserX,
   Edit2,
   Check,
+  Crop,
   Copy,
   Plus,
   Lock,
@@ -59,15 +61,6 @@ interface StaffOperationsManagerProps {
   onRefresh: () => void;
   role?: 'admin' | 'superadmin';
 }
-
-const PRESET_AVATARS = [
-  { name: 'Master Barber', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400' },
-  { name: 'Hair Sculptor', url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=400' },
-  { name: 'Fade Specialist', url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=400' },
-  { name: 'Precision Artist', url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=400' },
-  { name: 'Beard Stylist', url: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&q=80&w=400' },
-  { name: 'VIP Groomer', url: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=400' },
-];
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -121,7 +114,7 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
   const [staffPin, setStaffPin] = useState('1234');
   const [staffCommission, setStaffCommission] = useState(50);
   const [staffExp, setStaffExp] = useState(5);
-  const [staffAvatar, setStaffAvatar] = useState(PRESET_AVATARS[0].url);
+  const [staffAvatar, setStaffAvatar] = useState('');
   const [staffAvailableDays, setStaffAvailableDays] = useState<string[]>(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
   const [staffStartTime, setStaffStartTime] = useState('09:00');
   const [staffEndTime, setStaffEndTime] = useState('19:00');
@@ -130,6 +123,10 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
   const [isStaffSaving, setIsStaffSaving] = useState(false);
   const [staffModalError, setStaffModalError] = useState('');
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  // Image Crop Modal State
+  const [isCropModalOpen, setIsCropModalOpen] = useState(false);
+  const [cropSourceUrl, setCropSourceUrl] = useState<string>('');
 
   // Deleting state
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -200,7 +197,7 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
     setStaffPin(d.loginPin || '1234');
     setStaffCommission(d.commissionPercent ?? 50);
     setStaffExp(d.experienceYears || 5);
-    setStaffAvatar(d.avatarUrl || PRESET_AVATARS[0].url);
+    setStaffAvatar(d.avatarUrl || '');
     setStaffAvailableDays(d.availableDays && d.availableDays.length > 0 ? d.availableDays : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
     setStaffStartTime(d.workingHours?.start || '09:00');
     setStaffEndTime(d.workingHours?.end || '19:00');
@@ -219,7 +216,7 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
     setStaffPin('1234');
     setStaffCommission(50);
     setStaffExp(5);
-    setStaffAvatar(PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)].url);
+    setStaffAvatar('');
     setStaffAvailableDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
     setStaffStartTime('09:00');
     setStaffEndTime('19:00');
@@ -305,16 +302,35 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
     }
   };
 
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setCropSourceUrl(reader.result);
+        setIsCropModalOpen(true);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleCropComplete = async (croppedDataUrl: string, blob?: Blob) => {
+    setIsCropModalOpen(false);
     setUploadingAvatar(true);
     try {
-      const url = await uploadImageToStorage(file, 'staff', 350, 350);
-      setStaffAvatar(url);
+      if (blob) {
+        const file = new File([blob], `staff_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const url = await uploadImageToStorage(file, 'staff', 400, 400);
+        setStaffAvatar(url || croppedDataUrl);
+      } else {
+        setStaffAvatar(croppedDataUrl);
+      }
       playSuccessChime();
     } catch (err: any) {
-      setStaffModalError(err.message || 'Avatar upload failed');
+      console.error('Staff avatar upload failed:', err);
+      setStaffAvatar(croppedDataUrl);
     } finally {
       setUploadingAvatar(false);
     }
@@ -688,7 +704,7 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center space-x-3">
                         <img
-                          src={barber.avatarUrl || PRESET_AVATARS[0].url}
+                          src={barber.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                           alt={barber.name}
                           referrerPolicy="no-referrer"
                           className="w-13 h-13 rounded-2xl object-cover border-2 border-[#3d3d46] shadow-sm shrink-0"
@@ -842,14 +858,27 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
                   <div className="space-y-2 flex-1">
                     <label className="font-bold text-stone-300 block">Avatar Photo</label>
                     <div className="flex items-center space-x-2">
+                      {staffAvatar && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCropSourceUrl(staffAvatar);
+                            setIsCropModalOpen(true);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-emerald-900/60 hover:bg-emerald-800 border border-emerald-500/40 text-emerald-300 font-bold cursor-pointer flex items-center space-x-1.5 transition-colors"
+                        >
+                          <Crop className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Crop</span>
+                        </button>
+                      )}
                       <label className="px-3 py-2 rounded-xl bg-[#28282e] hover:bg-[#32323a] border border-[#3d3d46] text-white font-bold cursor-pointer flex items-center space-x-1.5">
                         <Upload className="w-3.5 h-3.5 text-[#D4AF37]" />
-                        <span>{uploadingAvatar ? 'Uploading...' : 'Upload Image'}</span>
+                        <span>{uploadingAvatar ? 'Uploading & Cropping...' : 'Upload & Crop'}</span>
                         <input
                           type="file"
                           accept="image/*"
                           className="hidden"
-                          onChange={handleAvatarUpload}
+                          onChange={handleAvatarFilePicked}
                           disabled={uploadingAvatar}
                         />
                       </label>
@@ -1300,6 +1329,17 @@ export const StaffOperationsManager: React.FC<StaffOperationsManagerProps> = ({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Image Crop Modal */}
+      <ImageCropModal
+        isOpen={isCropModalOpen}
+        imageSrc={cropSourceUrl}
+        onClose={() => setIsCropModalOpen(false)}
+        onCancel={() => setIsCropModalOpen(false)}
+        onCropComplete={handleCropComplete}
+        cropShape="square"
+        outputSize={400}
+      />
     </div>
   );
 };

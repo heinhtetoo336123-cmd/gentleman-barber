@@ -3,6 +3,7 @@ import { Designer } from '../types';
 import { api } from '../api/client';
 import { playNotificationChime, playSuccessChime } from '../utils/audio';
 import { uploadImageToStorage } from '../utils/imageCompressor';
+import { ImageCropModal } from './ImageCropModal';
 import {
   Users,
   Plus,
@@ -12,6 +13,7 @@ import {
   Clock,
   X,
   Upload,
+  Crop,
   Check,
   CheckCircle2,
   AlertCircle,
@@ -28,33 +30,6 @@ interface DesignerManagerProps {
   designers: Designer[];
   onRefresh: () => void;
 }
-
-const PRESET_AVATARS = [
-  {
-    name: 'Master Barber',
-    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400',
-  },
-  {
-    name: 'Hair Sculptor',
-    url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=400',
-  },
-  {
-    name: 'Fade Specialist',
-    url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=400',
-  },
-  {
-    name: 'Precision Artist',
-    url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=400',
-  },
-  {
-    name: 'Beard Stylist',
-    url: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&q=80&w=400',
-  },
-  {
-    name: 'VIP Groomer',
-    url: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&q=80&w=400',
-  },
-];
 
 const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const QUICK_EXP = [1, 3, 5, 8, 10, 15];
@@ -77,6 +52,10 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
+  // Image Crop Modal State
+  const [isCropModalOpen, setIsCropModalOpen] = useState(false);
+  const [cropSourceUrl, setCropSourceUrl] = useState<string>('');
+
   // Local optimistic state for instant zero-lag rendering
   const [displayDesigners, setDisplayDesigners] = useState<Designer[]>(designers);
 
@@ -92,7 +71,7 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
   const [availableDays, setAvailableDays] = useState<string[]>(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('19:00');
-  const [avatarUrl, setAvatarUrl] = useState(PRESET_AVATARS[0].url);
+  const [avatarUrl, setAvatarUrl] = useState('');
   const [bio, setBio] = useState('');
 
   const openCreate = () => {
@@ -104,7 +83,7 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
     setAvailableDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
     setStartTime('09:00');
     setEndTime('19:00');
-    setAvatarUrl(PRESET_AVATARS[0].url);
+    setAvatarUrl('');
     setBio('');
     setErrorMsg(null);
     setCurrentStep(1);
@@ -124,7 +103,7 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
     );
     setStartTime(d.workingHours?.start || '09:00');
     setEndTime(d.workingHours?.end || '19:00');
-    setAvatarUrl(d.avatarUrl || PRESET_AVATARS[0].url);
+    setAvatarUrl(d.avatarUrl || '');
     setBio(d.bio || '');
     setErrorMsg(null);
     setCurrentStep(1);
@@ -141,18 +120,34 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
     }
   };
 
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarFilePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploadingAvatar(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setCropSourceUrl(reader.result);
+        setIsCropModalOpen(true);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
+  const handleCropComplete = async (croppedDataUrl: string, blob?: Blob) => {
+    setIsCropModalOpen(false);
+    setUploadingAvatar(true);
     try {
-      const url = await uploadImageToStorage(file, 'designers', 350, 350);
-      if (url) {
-        setAvatarUrl(url);
+      if (blob) {
+        const file = new File([blob], `avatar_${Date.now()}.jpg`, { type: 'image/jpeg' });
+        const url = await uploadImageToStorage(file, 'designers', 400, 400);
+        setAvatarUrl(url || croppedDataUrl);
+      } else {
+        setAvatarUrl(croppedDataUrl);
       }
     } catch (err) {
       console.error('Avatar upload failed:', err);
+      setAvatarUrl(croppedDataUrl);
     } finally {
       setUploadingAvatar(false);
     }
@@ -203,7 +198,7 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
         experienceYears: Number(experienceYears) || 5,
         commissionPercent: Number(commissionPercent) ?? 50,
         specialties: ['Haircut', 'Styling'],
-        avatarUrl: avatarUrl.trim() || PRESET_AVATARS[0].url,
+        avatarUrl: avatarUrl.trim(),
         bio: bio.trim(),
         availableDays,
         workingHours: { start: startTime, end: endTime },
@@ -685,52 +680,60 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
                       </p>
                     </div>
 
-                    {/* Presets */}
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
-                      {PRESET_AVATARS.map((p, idx) => {
-                        const isSelected = avatarUrl === p.url;
-                        return (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => setAvatarUrl(p.url)}
-                            className={`relative aspect-square rounded-2xl overflow-hidden border-2 transition-all cursor-pointer ${
-                              isSelected
-                                ? 'border-emerald-400 ring-2 ring-emerald-400/40 scale-95'
-                                : 'border-stone-800 hover:border-stone-600 opacity-70 hover:opacity-100'
-                            }`}
-                          >
-                            <img src={p.url} alt={p.name} className="w-full h-full object-cover" />
-                            {isSelected && (
-                              <div className="absolute inset-0 bg-stone-950/50 flex items-center justify-center text-emerald-300">
-                                <Check className="w-5 h-5" />
-                              </div>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {/* Photo Upload & Cropper */}
+                    <div className="bg-stone-900 border border-stone-800 rounded-2xl p-5 space-y-4">
+                      {avatarUrl ? (
+                        <div className="flex items-center space-x-4">
+                          <img
+                            src={avatarUrl}
+                            alt="Avatar Preview"
+                            className="w-20 h-20 rounded-2xl object-cover border-2 border-emerald-400 shadow-md"
+                          />
+                          <div className="space-y-2">
+                            <span className="text-xs font-bold text-white block">Current Avatar</span>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCropSourceUrl(avatarUrl);
+                                  setIsCropModalOpen(true);
+                                }}
+                                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 cursor-pointer shadow-xs transition-colors"
+                              >
+                                <Crop className="w-3.5 h-3.5" />
+                                <span>Crop / Resize Photo</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAvatarUrl('')}
+                                className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-6 border-2 border-dashed border-stone-700 rounded-2xl bg-stone-950/50">
+                          <Users className="w-10 h-10 text-stone-500 mx-auto mb-2" />
+                          <p className="text-xs text-stone-300 font-bold mb-1">No Avatar Photo Selected</p>
+                          <p className="text-[11px] text-stone-500">Upload a custom barber stylist photo to crop and optimize.</p>
+                        </div>
+                      )}
 
-                    {/* Custom Upload or URL */}
-                    <div className="bg-stone-900 border border-stone-800 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3">
-                      <input
-                        type="url"
-                        placeholder="Paste image URL..."
-                        value={avatarUrl}
-                        onChange={(e) => setAvatarUrl(e.target.value)}
-                        className="w-full sm:flex-1 bg-stone-950 border border-stone-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-hidden focus:border-emerald-400"
-                      />
-                      <label className="w-full sm:w-auto px-4 py-2 bg-stone-800 hover:bg-stone-700 text-white rounded-xl text-xs font-mono font-bold cursor-pointer flex items-center justify-center space-x-1.5 shrink-0 transition-colors">
-                        <Upload className="w-3.5 h-3.5 text-emerald-300" />
-                        <span>{uploadingAvatar ? 'Uploading...' : 'Upload Photo'}</span>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleAvatarUpload}
-                          className="hidden"
-                          disabled={uploadingAvatar}
-                        />
-                      </label>
+                      <div className="pt-2">
+                        <label className="w-full px-4 py-3 bg-emerald-900/40 hover:bg-emerald-900/60 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-bold cursor-pointer flex items-center justify-center space-x-2 transition-colors">
+                          <Upload className="w-4 h-4 text-emerald-400" />
+                          <span>{uploadingAvatar ? 'Uploading & Cropping...' : 'Upload Photo & Crop (Native Editor)'}</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleAvatarFilePicked}
+                            className="hidden"
+                            disabled={uploadingAvatar}
+                          />
+                        </label>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -880,6 +883,17 @@ export const DesignerManager: React.FC<DesignerManagerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Image Crop Modal */}
+      <ImageCropModal
+        isOpen={isCropModalOpen}
+        imageSrc={cropSourceUrl}
+        onClose={() => setIsCropModalOpen(false)}
+        onCancel={() => setIsCropModalOpen(false)}
+        onCropComplete={handleCropComplete}
+        cropShape="square"
+        outputSize={400}
+      />
     </div>
   );
 };

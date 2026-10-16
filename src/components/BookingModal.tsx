@@ -517,7 +517,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
           reviewsCount: 150,
           experienceYears: 8,
           specialties: ['Classic Cut'],
-          avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400',
+          avatarUrl: 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400',
           availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
           workingHours: { start: '09:00 AM', end: '08:00 PM' },
         });
@@ -1211,7 +1211,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                         : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
                     }`}
                   >
-                    <span className="block text-xs font-bold">🏪 {lang === 'my' ? 'ဆိုင်ရောက်မှပေးမည်' : 'Pay at Shop'}</span>
+                    <span className="block text-xs font-bold">💵 {lang === 'my' ? 'Cash (လက်ငင်း/ဆိုင်တွင်ပေးမည်)' : 'Cash'}</span>
                   </button>
 
                   <button

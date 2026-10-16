@@ -1032,6 +1032,45 @@ export const api = {
     return newOrderedServices;
   },
 
+  async reorderServicesBatch(updates: { id: string; displayOrder: number }[]): Promise<Service[]> {
+    if (!updates || updates.length === 0) return getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+
+    const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+    const updateMap = new Map(updates.map(u => [u.id, u.displayOrder]));
+
+    const updated = sortServicesForClient(
+      current.map(s => {
+        if (updateMap.has(s.id)) {
+          const newOrder = updateMap.get(s.id)!;
+          return { ...s, displayOrder: newOrder, order: newOrder };
+        }
+        return s;
+      })
+    );
+
+    setLocalData(LOCAL_SERVICES_KEY, updated);
+    notifyLocalSubscribers('services', updated);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('baba_services_reordered', { detail: updated }));
+    }
+
+    try {
+      const batch = writeBatch(db);
+      updates.forEach((u) => {
+        batch.update(doc(db, 'services', u.id), {
+          displayOrder: u.displayOrder,
+          order: u.displayOrder,
+        });
+      });
+      await batch.commit();
+    } catch (e) {
+      console.warn('Firestore reorderServicesBatch fallback:', e);
+    }
+
+    return updated;
+  },
+
   async deleteService(id: string): Promise<boolean> {
     addDeletedId(LOCAL_DELETED_SRV_KEY, id);
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
@@ -1122,7 +1161,7 @@ export const api = {
 
   async addDesigner(designer: Partial<Designer>): Promise<Designer> {
     const newId = `des-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const safeAvatar = sanitizeImageUrl(designer.avatarUrl, 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400');
+    const safeAvatar = sanitizeImageUrl(designer.avatarUrl, 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400');
     const newDes: Designer = {
       id: newId,
       name: designer.name?.trim() || 'Master Stylist',
@@ -1219,7 +1258,7 @@ export const api = {
     if (cleanUpdates.commissionPercent !== undefined) cleanUpdates.commissionPercent = Number(cleanUpdates.commissionPercent);
     if (cleanUpdates.bio !== undefined) cleanUpdates.bio = cleanUpdates.bio.trim();
     if (cleanUpdates.avatarUrl !== undefined) {
-      cleanUpdates.avatarUrl = sanitizeImageUrl(cleanUpdates.avatarUrl, 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400');
+      cleanUpdates.avatarUrl = sanitizeImageUrl(cleanUpdates.avatarUrl, 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400');
       cleanUpdates.images = [cleanUpdates.avatarUrl];
     }
 

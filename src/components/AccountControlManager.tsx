@@ -106,7 +106,7 @@ export const AccountControlManager: React.FC<AccountControlManagerProps> = ({
   const [newPhone, setNewPhone] = useState('09');
   const [newPin, setNewPin] = useState('1234');
   const [newCommission, setNewCommission] = useState(50);
-  const [newAvatar, setNewAvatar] = useState('https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400');
+  const [newAvatar, setNewAvatar] = useState('https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400');
   const [isCreating, setIsCreating] = useState(false);
 
   // Toast feedback

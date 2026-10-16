@@ -156,6 +156,19 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
     }
   }, [userPhone]);
 
+  // Catalog Services & Designers for service image resolution
+  const [catalogServices, setCatalogServices] = useState(() => api.getCachedServices());
+  const [catalogDesigners, setCatalogDesigners] = useState(() => api.getCachedDesigners());
+
+  useEffect(() => {
+    const unsub1 = api.subscribeToServices(setCatalogServices);
+    const unsub2 = api.subscribeToDesigners(setCatalogDesigners);
+    return () => {
+      unsub1();
+      unsub2();
+    };
+  }, []);
+
   // On-Demand Client History Loader: automatically fetches historical records for this client phone
   useEffect(() => {
     if (activeClientPhone && activeClientPhone.trim().length >= 7) {
@@ -177,6 +190,12 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
   const myBookings = getClientBookings(bookings, activeClientPhone);
 
   const myFilteredBookings = myBookings.filter((b) => {
+    // Auto-Sanitize & filter corrupt or empty record stubs
+    if (!b || !b.id) return false;
+    const hasServiceName = Boolean((b.serviceName && b.serviceName.trim() && b.serviceName !== '()') || (b.servicesList && b.servicesList.length > 0));
+    const hasPrice = (b.servicePrice && b.servicePrice > 0) || (b.price && b.price > 0) || (b.servicesList && b.servicesList.length > 0);
+    if (!hasServiceName && !hasPrice && !b.bookingCode) return false;
+
     if (filter === 'upcoming') {
       return (
         b.status === 'confirmed' ||
@@ -511,6 +530,54 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
               : statusBadgeConfig[b.status] || statusBadgeConfig.pending;
             const StatusIcon = statusConfig.icon;
 
+            // Auto-Sanitize Display Fields
+            const cleanServiceName = (b.serviceName && b.serviceName.trim() && b.serviceName !== '()')
+              ? b.serviceName
+              : (b.servicesList && b.servicesList.length > 0)
+              ? b.servicesList.map(s => s.serviceName).filter(Boolean).join(' + ')
+              : 'Haircut & Styling Service';
+
+            const cleanDesignerName = (b.designerName && b.designerName.trim() && b.designerName !== '()')
+              ? b.designerName
+              : 'Barber Stylist';
+
+            const computedPrice = (b.servicePrice && b.servicePrice > 0)
+              ? b.servicePrice
+              : (b.price && b.price > 0)
+              ? b.price
+              : (b.servicesList && b.servicesList.length > 0)
+              ? b.servicesList.reduce((acc, curr) => acc + (curr.servicePrice || 0), 0)
+              : 0;
+
+            const cleanDateTime = `${b.date || ''}${b.timeSlot ? ` (${b.timeSlot})` : ''}`.trim() || 'Date Pending';
+
+            const isBadSymbolImage = (url?: string) => {
+              if (!url || typeof url !== 'string') return true;
+              return url.includes('photo-1534528741775-53994a69daeb') || url.includes('symbol') || url.includes('mannequin');
+            };
+
+            // Match catalog service photo for this booking
+            const matchedCatalogSrv = catalogServices.find((s) => {
+              if (!s.name) return false;
+              const sName = s.name.toLowerCase().trim();
+              const cName = cleanServiceName.toLowerCase().trim();
+              return cName.includes(sName) || sName.includes(cName);
+            });
+
+            const matchedCatalogDes = catalogDesigners.find((d) => {
+              if (!d.name) return false;
+              const dName = d.name.toLowerCase().trim();
+              const cName = cleanDesignerName.toLowerCase().trim();
+              return cName.includes(dName) || dName.includes(cName);
+            });
+
+            const displayCardPhoto =
+              (!isBadSymbolImage(matchedCatalogSrv?.imageUrl) ? matchedCatalogSrv?.imageUrl : null) ||
+              (!isBadSymbolImage((b as any).serviceImage) ? (b as any).serviceImage : null) ||
+              (!isBadSymbolImage(matchedCatalogDes?.avatarUrl) ? matchedCatalogDes?.avatarUrl : null) ||
+              (!isBadSymbolImage(b.designerAvatar) ? b.designerAvatar : null) ||
+              'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=400';
+
             return (
               <div
                 key={b.id}
@@ -520,23 +587,23 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
                 <div className="flex items-center justify-between gap-2.5">
                   <div className="flex items-center space-x-2.5 min-w-0 flex-1">
                     <img
-                      src={b.designerAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400'}
-                      alt={b.designerName}
+                      src={displayCardPhoto}
+                      alt={cleanServiceName}
                       referrerPolicy="no-referrer"
-                      className="w-9 h-9 rounded-xl object-cover border border-emerald-100 shrink-0"
+                      className="w-10 h-10 rounded-xl object-cover border border-emerald-100 shrink-0 shadow-2xs"
                     />
                     <div className="min-w-0 flex-1 space-y-0.5">
                       <div className="flex items-center space-x-1.5 flex-wrap">
-                        <h4 className="font-bold text-xs text-stone-900 truncate">{b.serviceName}</h4>
+                        <h4 className="font-bold text-xs text-stone-900 truncate">{cleanServiceName}</h4>
                         <span className="font-mono text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                          {b.bookingCode}
+                          {b.bookingCode || 'GTM'}
                         </span>
                       </div>
                       <div className="flex items-center space-x-2 text-[11px] text-stone-500 flex-wrap">
-                        <span className="text-stone-700 font-medium truncate">{b.designerName}</span>
+                        <span className="text-stone-700 font-medium truncate">{cleanDesignerName}</span>
                         <span className="text-stone-300">•</span>
                         <span className="text-emerald-900 font-bold font-mono">
-                          {b.date} ({b.timeSlot})
+                          {cleanDateTime}
                         </span>
                       </div>
                     </div>
@@ -544,7 +611,7 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
 
                   {/* Right Price & Status */}
                   <div className="flex flex-col items-end shrink-0 space-y-1">
-                    <span className="text-xs font-black font-mono text-stone-900">{formatPrice(b.servicePrice)}</span>
+                    <span className="text-xs font-black font-mono text-stone-900">{formatPrice(computedPrice)}</span>
                     {isCompleted ? (
                       <button
                         type="button"

@@ -39,17 +39,23 @@ export async function initializePWAUpdateService(): Promise<ServiceWorkerRegistr
     return null;
   }
 
+  // Check if a service worker controller already controlled this page BEFORE registration
+  const hadPreviousController = Boolean(navigator.serviceWorker.controller);
+
   try {
     const registration = await navigator.serviceWorker.register('/sw.js', {
       scope: '/',
     });
 
-    // 1. If an updated worker is already waiting, trigger silent skipWaiting immediately
-    if (registration.waiting) {
+    // 1. If an updated worker is already waiting and there was a previous controller, trigger update
+    if (registration.waiting && hadPreviousController) {
       waitingWorker = registration.waiting;
       isUpdateAvailable = true;
       waitingWorker.postMessage({ type: 'SKIP_WAITING' });
       notifyListeners();
+    } else if (registration.waiting) {
+      // First-time device load: activate silently without alerting user
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
     }
 
     // 2. Listen for new service worker installation lifecycle
@@ -59,22 +65,27 @@ export async function initializePWAUpdateService(): Promise<ServiceWorkerRegistr
 
       newWorker.addEventListener('statechange', () => {
         if (newWorker.state === 'installed') {
-          if (navigator.serviceWorker.controller) {
-            // New version is installed and waiting -> send silent SKIP_WAITING instantly
+          // Only flag as available update if this device was already running an older worker version
+          if (navigator.serviceWorker.controller && hadPreviousController) {
             waitingWorker = newWorker;
             isUpdateAvailable = true;
             newWorker.postMessage({ type: 'SKIP_WAITING' });
             notifyListeners();
+          } else {
+            // First install: activate silently
+            newWorker.postMessage({ type: 'SKIP_WAITING' });
           }
         }
       });
     });
 
-    // 3. Handle controllerchange: Notify listeners gracefully without forcing rapid mid-boot reloads
+    // 3. Handle controllerchange: Only notify if updating from an existing controller
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('ℹ️ Service Worker controller changed. Updates will apply smoothly on next launch.');
-      isUpdateAvailable = true;
-      notifyListeners();
+      console.log('ℹ️ Service Worker controller updated.');
+      if (hadPreviousController && !isUpdateAvailable) {
+        isUpdateAvailable = true;
+        notifyListeners();
+      }
     });
 
     // 4. Proactive Background Update Checks:

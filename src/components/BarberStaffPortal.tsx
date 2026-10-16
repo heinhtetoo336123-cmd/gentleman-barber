@@ -779,7 +779,7 @@ export const BarberStaffPortal: React.FC<BarberStaffPortalProps> = ({
           <div className="flex items-center space-x-3.5">
             <div className="relative">
               <img
-                src={activeDesigner?.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                src={activeDesigner?.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=200'}
                 alt={activeDesigner?.name}
                 referrerPolicy="no-referrer"
                 className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl object-cover border-2 border-emerald-600 shadow-xs shrink-0"

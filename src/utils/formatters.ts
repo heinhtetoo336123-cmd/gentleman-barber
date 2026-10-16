@@ -245,7 +245,7 @@ export function sortBookingsMostRecentFirst<T extends { createdAt?: string; upda
  * 6. Other categories
  * Within the same category, sort by service name ascending.
  */
-export function sortServicesForClient<T extends { category?: string; name?: string; id?: string }>(
+export function sortServicesForClient<T extends { category?: string; name?: string; displayOrder?: number; id?: string }>(
   services: T[]
 ): T[] {
   if (!services || !Array.isArray(services)) return [];
@@ -267,6 +267,13 @@ export function sortServicesForClient<T extends { category?: string; name?: stri
 
     if (prioA !== prioB) {
       return prioA - prioB;
+    }
+
+    // Secondary: Sort by displayOrder if available
+    const orderA = typeof a.displayOrder === 'number' ? a.displayOrder : 999;
+    const orderB = typeof b.displayOrder === 'number' ? b.displayOrder : 999;
+    if (orderA !== orderB) {
+      return orderA - orderB;
     }
 
     return (a.name || '').localeCompare(b.name || '');

@@ -629,7 +629,7 @@ export const WalkinBackfillForm: React.FC<WalkinBackfillFormProps> = ({
                   }`}
                 >
                   <img
-                    src={des.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=400'}
+                    src={des.avatarUrl || 'https://images.unsplash.com/photo-1622286342621-4bd786c2447c?auto=format&fit=crop&q=80&w=400'}
                     alt={des.name}
                     referrerPolicy="no-referrer"
                     className="w-9 h-9 rounded-xl object-cover shrink-0 border border-black/10"
