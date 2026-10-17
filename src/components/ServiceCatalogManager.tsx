@@ -223,7 +223,16 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
   };
 
   const handleSave = async () => {
-    if (!validateStep(1) || !validateStep(2) || !validateStep(3)) {
+    if (!validateStep(1)) {
+      setCurrentStep(1);
+      return;
+    }
+    if (!validateStep(2)) {
+      setCurrentStep(2);
+      return;
+    }
+    if (!validateStep(3)) {
+      setCurrentStep(3);
       return;
     }
 
@@ -250,15 +259,15 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
         showToast('Service updated successfully.');
       } else {
         const created = await api.addService(payload);
-        setDisplayServices((prev) => [created, ...prev.filter((s) => s.id !== created.id)]);
+        setDisplayServices((prev) => sortServicesForClient([created, ...prev.filter((s) => s.id !== created.id)]));
         showToast('New service added.');
       }
 
       playSuccessChime();
       setIsFullScreenOpen(false);
-      onRefresh();
+      if (onRefresh) onRefresh();
     } catch (err: any) {
-      console.error(err);
+      console.error('Service save error:', err);
       setErrorMsg('Failed to save service. Please try again.');
     } finally {
       setSaving(false);
