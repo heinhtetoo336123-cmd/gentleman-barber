@@ -23,12 +23,18 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       
       {/* Service Image Header */}
       <div className="relative h-44 w-full overflow-hidden bg-stone-100">
-        <img
-          src={service.imageUrl}
-          alt={service.name}
-          referrerPolicy="no-referrer"
-          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-        />
+        {service.imageUrl && service.imageUrl.trim() ? (
+          <img
+            src={service.imageUrl.trim()}
+            alt={service.name}
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <div className="w-full h-full bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center text-emerald-300">
+            <Scissors className="w-10 h-10 opacity-70" />
+          </div>
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-stone-900/80 via-stone-900/20 to-transparent" />
         
         {/* Category Pill */}

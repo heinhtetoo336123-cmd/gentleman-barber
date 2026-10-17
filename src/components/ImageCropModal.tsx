@@ -235,18 +235,29 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, cropWidth, cropHeight);
 
+      // UI crop box reference dimensions
+      const boxW = 260;
+      const boxH = aspectRatio > 0 ? 260 / aspectRatio : 260;
+
+      // Base scale of image inside UI crop box before user zoom
+      const baseScale = Math.min(boxW / (img.naturalWidth || 1), boxH / (img.naturalHeight || 1));
+
+      // Scale multiplier from UI crop box to destination canvas
+      const scaleToCanvas = cropWidth / boxW;
+
       ctx.save();
       // Translate to canvas center
       ctx.translate(cropWidth / 2, cropHeight / 2);
       ctx.rotate((rotation * Math.PI) / 180);
-      ctx.scale(zoom, zoom);
 
-      // Pan translation
-      const scaleFactor = cropWidth / 260;
-      ctx.translate(pan.x * scaleFactor, pan.y * scaleFactor);
+      // Apply pan translation scaled to canvas
+      ctx.translate(pan.x * scaleToCanvas, pan.y * scaleToCanvas);
 
-      // Draw image centered
-      ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+      // Render image scaled to exact displayed proportion
+      const renderW = img.naturalWidth * baseScale * zoom * scaleToCanvas;
+      const renderH = img.naturalHeight * baseScale * zoom * scaleToCanvas;
+
+      ctx.drawImage(img, -renderW / 2, -renderH / 2, renderW, renderH);
       ctx.restore();
 
       const rawCroppedUrl = canvas.toDataURL('image/jpeg', 0.88);
@@ -429,7 +440,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
         <div className="flex items-center justify-between px-4 py-3 bg-[#1c1c1e] border-t border-white/10">
           <div className="flex items-center gap-2 w-full max-w-[210px]">
             <button
-              onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}
+              onClick={() => setZoom((z) => Math.max(0.1, z - 0.1))}
               className="p-1.5 text-gray-400 hover:text-white rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer"
               title="Zoom Out"
             >
@@ -437,7 +448,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
             </button>
             <input
               type="range"
-              min="0.5"
+              min="0.1"
               max="3"
               step="0.05"
               value={zoom}

@@ -204,11 +204,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     if (isOpen && !prevIsOpenRef.current) {
       if (availableServices && availableServices.length > 0) {
         setServices(availableServices.filter((s) => s.active !== false));
+      } else {
+        setServices(api.getCachedServices().filter((s) => s.active !== false));
       }
       if (availableDesigners && availableDesigners.length > 0) {
         setDesigners(availableDesigners.filter((d) => d.active !== false));
+      } else {
+        setDesigners(api.getCachedDesigners().filter((d) => d.active !== false));
       }
-      loadData();
 
       const hasDirectDesigner = Boolean(initialDesigner);
       setIsPreselectedBarber(hasDirectDesigner);
@@ -304,18 +307,18 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
   }, [selectedDate, lockedSlots, clockTick, step]);
 
-  const loadData = async () => {
-    try {
-      const [sList, dList] = await Promise.all([
-        api.getServices(),
-        api.getDesigners(),
-      ]);
-      setServices(sList.filter((s) => s.active !== false));
-      setDesigners(dList.filter((d) => d.active !== false));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  useEffect(() => {
+    const unsubSrv = api.subscribeToServices((srvs) => {
+      setServices(srvs.filter((s) => s.active !== false));
+    });
+    const unsubDes = api.subscribeToDesigners((drs) => {
+      setDesigners(drs.filter((d) => d.active !== false));
+    });
+    return () => {
+      unsubSrv();
+      unsubDes();
+    };
+  }, []);
 
   // Auto-sync client profile when phone number is entered
   useEffect(() => {
@@ -1265,20 +1268,20 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     </div>
 
                     {/* QR Code if configured */}
-                    {(shopSettings?.kpayQrUrl || shopSettings?.waveQrUrl) && (
+                    {(shopSettings?.kpayQrUrl?.trim() || shopSettings?.waveQrUrl?.trim()) && (
                       <div className="flex items-center space-x-2 p-2 bg-stone-50 rounded-xl border border-stone-200">
-                        {shopSettings?.kpayQrUrl && (
+                        {shopSettings?.kpayQrUrl?.trim() ? (
                           <div className="text-center flex-1">
                             <span className="text-[9px] text-stone-500 font-bold block mb-1">KPay QR</span>
-                            <img src={shopSettings.kpayQrUrl} alt="KPay QR" className="w-20 h-20 object-contain mx-auto rounded border bg-white" />
+                            <img src={shopSettings.kpayQrUrl.trim()} alt="KPay QR" className="w-20 h-20 object-contain mx-auto rounded border bg-white" />
                           </div>
-                        )}
-                        {shopSettings?.waveQrUrl && (
+                        ) : null}
+                        {shopSettings?.waveQrUrl?.trim() ? (
                           <div className="text-center flex-1">
                             <span className="text-[9px] text-stone-500 font-bold block mb-1">Wave QR</span>
-                            <img src={shopSettings.waveQrUrl} alt="Wave QR" className="w-20 h-20 object-contain mx-auto rounded border bg-white" />
+                            <img src={shopSettings.waveQrUrl.trim()} alt="Wave QR" className="w-20 h-20 object-contain mx-auto rounded border bg-white" />
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     )}
 

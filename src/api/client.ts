@@ -279,12 +279,12 @@ function setLocalData<T>(key: string, value: T) {
  * Sanitizes image URL to ensure no oversized uncompressed strings (>100KB)
  * are stored in Firestore documents or LocalStorage.
  */
-function sanitizeImageUrl(url: string | undefined, fallback: string): string {
+function sanitizeImageUrl(url: string | undefined, fallback = ''): string {
   if (!url || typeof url !== 'string') return fallback;
   const trimmed = url.trim();
   if (!trimmed) return fallback;
-  // If it's a huge raw data URL > 100,000 chars, return fallback or trimmed safe asset
-  if (trimmed.startsWith('data:image/') && trimmed.length > 120000) {
+  // If it's a huge raw data URL > 800,000 chars, return fallback or trimmed safe asset
+  if (trimmed.startsWith('data:image/') && trimmed.length > 800000) {
     return fallback;
   }
   return trimmed;
@@ -909,7 +909,7 @@ export const api = {
 
   async addService(service: Partial<Service>): Promise<Service> {
     const newId = `srv-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const safeImage = sanitizeImageUrl(service.imageUrl, 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=600');
+    const safeImage = sanitizeImageUrl(service.imageUrl, '');
     
     // Auto calculate display order if not explicitly passed
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
@@ -940,10 +940,14 @@ export const api = {
     setLocalData(LOCAL_SERVICES_KEY, updated);
     notifyLocalSubscribers('services', updated);
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('barbershop_data_changed', { detail: { collection: 'services' } }));
+    }
+
     try {
-      await setDoc(doc(db, 'services', newId), newSrv);
+      await setDoc(doc(db, 'services', newId), sanitizeForFirestore(newSrv));
     } catch (e) {
-      console.warn('Firestore addService fallback:', e);
+      console.warn('Firestore addService error:', e);
     }
 
     return newSrv;
@@ -965,7 +969,7 @@ export const api = {
     }
     if (cleanUpdates.description !== undefined) cleanUpdates.description = cleanUpdates.description.trim();
     if (cleanUpdates.imageUrl !== undefined) {
-      cleanUpdates.imageUrl = sanitizeImageUrl(cleanUpdates.imageUrl, 'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=600');
+      cleanUpdates.imageUrl = sanitizeImageUrl(cleanUpdates.imageUrl, '');
     }
 
     const current = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
@@ -974,9 +978,13 @@ export const api = {
     notifyLocalSubscribers('services', updated);
 
     try {
-      await updateDoc(doc(db, 'services', id), cleanUpdates);
+      await updateDoc(doc(db, 'services', id), sanitizeForFirestore(cleanUpdates));
     } catch (e) {
-      console.warn('Firestore updateService fallback:', e);
+      try {
+        await setDoc(doc(db, 'services', id), sanitizeForFirestore({ ...cleanUpdates, id }), { merge: true });
+      } catch (err) {
+        console.warn('Firestore updateService error:', err);
+      }
     }
 
     return updated.find(s => s.id === id) || { ...current.find(s => s.id === id)!, ...cleanUpdates };
@@ -1103,18 +1111,23 @@ export const api = {
     // 2. Shared Firestore real-time snapshot
     const releaseListener = retainSharedListener('services', () => {
       return onSnapshot(collection(db, 'services'), (snap) => {
-        if (snap.metadata.hasPendingWrites) return;
         const deletedSet = getDeletedIds(LOCAL_DELETED_SRV_KEY);
+        let firestoreList: Service[] = [];
         if (!snap.empty) {
-          const firestoreList = snap.docs
+          firestoreList = snap.docs
             .map(d => ({ id: d.id, ...d.data() } as Service))
             .filter(s => !deletedSet.has(s.id) && !MOCK_SAMPLE_SERVICE_IDS.has(s.id));
-
-          // Strict sort according to custom admin displayOrder (Hair Cut first as default)
-          const sorted = sortServicesForClient(firestoreList);
-          setLocalData(LOCAL_SERVICES_KEY, sorted);
-          notifyLocalSubscribers('services', sorted);
         }
+
+        // Merge locally added services that are in flight or pending write
+        const localCurrent = getLocalData<Service[]>(LOCAL_SERVICES_KEY, []);
+        const localOnly = localCurrent.filter(ls => !firestoreList.some(fs => fs.id === ls.id) && !deletedSet.has(ls.id));
+        const merged = [...firestoreList, ...localOnly];
+
+        // Strict sort according to custom admin displayOrder
+        const sorted = sortServicesForClient(merged);
+        setLocalData(LOCAL_SERVICES_KEY, sorted);
+        notifyLocalSubscribers('services', sorted);
       }, (err) => console.warn('subscribeToServices error:', err));
     });
 
@@ -1188,9 +1201,9 @@ export const api = {
 
     // Save to Firestore
     try {
-      await setDoc(doc(db, 'designers', newId), newDes);
+      await setDoc(doc(db, 'designers', newId), sanitizeForFirestore(newDes));
     } catch (e) {
-      console.warn('Firestore addDesigner fallback:', e);
+      console.warn('Firestore addDesigner error:', e);
     }
 
     return newDes;
@@ -1268,9 +1281,13 @@ export const api = {
     notifyLocalSubscribers('designers', updated);
 
     try {
-      await updateDoc(doc(db, 'designers', id), cleanUpdates);
+      await updateDoc(doc(db, 'designers', id), sanitizeForFirestore(cleanUpdates));
     } catch (e) {
-      console.warn('Firestore updateDesigner fallback:', e);
+      try {
+        await setDoc(doc(db, 'designers', id), sanitizeForFirestore({ ...cleanUpdates, id }), { merge: true });
+      } catch (err) {
+        console.warn('Firestore updateDesigner error:', err);
+      }
     }
 
     return updated.find(d => d.id === id || (d as any).firestoreDocId === id) || { id, name: 'Barber' } as Designer;
@@ -1343,7 +1360,6 @@ export const api = {
     // 2. Connect Firestore real-time snapshot with shared singleton listener
     const releaseListener = retainSharedListener('designers', () => {
       return onSnapshot(collection(db, 'designers'), (snap) => {
-        if (snap.metadata.hasPendingWrites) return;
         const deletedSet = getDeletedIds(LOCAL_DELETED_DES_KEY);
         if (!snap.empty) {
           const firestoreList = snap.docs

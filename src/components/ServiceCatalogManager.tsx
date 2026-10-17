@@ -80,6 +80,13 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
     setDisplayServices(sortServicesForClient(services));
   }, [services]);
 
+  useEffect(() => {
+    const unsub = api.subscribeToServices((srvs) => {
+      setDisplayServices(sortServicesForClient(srvs));
+    });
+    return () => unsub();
+  }, []);
+
   // Form Fields
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Hair Cut');
@@ -493,12 +500,18 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
               <div className="space-y-2.5">
                 {/* Photo & Badge */}
                 <div className="relative rounded-xl overflow-hidden aspect-16/9 bg-stone-100 border border-stone-100">
-                  <img
-                    src={service.imageUrl}
-                    alt={service.name}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
+                  {service.imageUrl && service.imageUrl.trim() ? (
+                    <img
+                      src={service.imageUrl.trim()}
+                      alt={service.name}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center text-emerald-300">
+                      <Scissors className="w-8 h-8 opacity-60" />
+                    </div>
+                  )}
                   <div className="absolute top-2 left-2 flex items-center space-x-1">
                     <span className="px-2 py-0.5 rounded-lg bg-emerald-950/80 backdrop-blur-xs text-white text-[10px] font-bold">
                       {service.category}
@@ -806,11 +819,17 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                   <div className="space-y-4">
                     {/* Current Preview with Crop Action */}
                     <div className="flex items-center space-x-3 p-3 bg-emerald-50/60 border border-emerald-200 rounded-2xl">
-                      <img
-                        src={imageUrl}
-                        alt="Service Preview"
-                        className="w-20 h-16 rounded-xl object-cover border border-emerald-200 shadow-2xs shrink-0"
-                      />
+                      {imageUrl && imageUrl.trim() ? (
+                        <img
+                          src={imageUrl.trim()}
+                          alt="Service Preview"
+                          className="w-20 h-16 rounded-xl object-cover border border-emerald-200 shadow-2xs shrink-0"
+                        />
+                      ) : (
+                        <div className="w-20 h-16 rounded-xl bg-emerald-900 flex items-center justify-center text-emerald-300 border border-emerald-200 shrink-0">
+                          <Scissors className="w-6 h-6" />
+                        </div>
+                      )}
                       <div className="min-w-0 flex-1 space-y-1.5">
                         <span className="text-xs font-bold text-emerald-950 block">Current Service Photo</span>
                         <div className="flex items-center space-x-2">
@@ -849,11 +868,17 @@ export const ServiceCatalogManager: React.FC<ServiceCatalogManagerProps> = ({
                     {/* Preview Card */}
                     <div className="bg-white border border-emerald-200 rounded-2xl overflow-hidden shadow-xs">
                       <div className="relative h-36 w-full bg-stone-100">
-                        <img
-                          src={imageUrl}
-                          alt={name}
-                          className="w-full h-full object-cover"
-                        />
+                        {imageUrl && imageUrl.trim() ? (
+                          <img
+                            src={imageUrl.trim()}
+                            alt={name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center text-emerald-300">
+                            <Scissors className="w-8 h-8 opacity-60" />
+                          </div>
+                        )}
                         <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-emerald-900/80 text-white text-[10px] font-bold">
                           {category}
                         </div>

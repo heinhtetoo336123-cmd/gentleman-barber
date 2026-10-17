@@ -553,7 +553,8 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
 
             const isBadSymbolImage = (url?: string) => {
               if (!url || typeof url !== 'string') return true;
-              return url.includes('photo-1534528741775-53994a69daeb') || url.includes('symbol') || url.includes('mannequin');
+              const lower = url.toLowerCase();
+              return lower.includes('photo-1534528741775-53994a69daeb') || lower.includes('photo-1503951914875') || lower.includes('symbol') || lower.includes('mannequin');
             };
 
             // Match catalog service photo for this booking
@@ -571,12 +572,13 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
               return cName.includes(dName) || dName.includes(cName);
             });
 
-            const displayCardPhoto =
+            const rawPhoto =
               (!isBadSymbolImage(matchedCatalogSrv?.imageUrl) ? matchedCatalogSrv?.imageUrl : null) ||
               (!isBadSymbolImage((b as any).serviceImage) ? (b as any).serviceImage : null) ||
               (!isBadSymbolImage(matchedCatalogDes?.avatarUrl) ? matchedCatalogDes?.avatarUrl : null) ||
-              (!isBadSymbolImage(b.designerAvatar) ? b.designerAvatar : null) ||
-              'https://images.unsplash.com/photo-1503951914875-452162b0f3f1?auto=format&fit=crop&q=80&w=400';
+              (!isBadSymbolImage(b.designerAvatar) ? b.designerAvatar : null);
+
+            const displayCardPhoto = rawPhoto && rawPhoto.trim() ? rawPhoto.trim() : null;
 
             return (
               <div
@@ -586,12 +588,18 @@ export const UserBookingHistory: React.FC<UserBookingHistoryProps> = ({
                 {/* Primary Row */}
                 <div className="flex items-center justify-between gap-2.5">
                   <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                    <img
-                      src={displayCardPhoto}
-                      alt={cleanServiceName}
-                      referrerPolicy="no-referrer"
-                      className="w-10 h-10 rounded-xl object-cover border border-emerald-100 shrink-0 shadow-2xs"
-                    />
+                    {displayCardPhoto ? (
+                      <img
+                        src={displayCardPhoto}
+                        alt={cleanServiceName}
+                        referrerPolicy="no-referrer"
+                        className="w-10 h-10 rounded-xl object-cover border border-emerald-100 shrink-0 shadow-2xs"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center text-emerald-300 font-bold border border-emerald-700/50 shrink-0 shadow-2xs">
+                        <Scissors className="w-5 h-5 text-emerald-400" />
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1 space-y-0.5">
                       <div className="flex items-center space-x-1.5 flex-wrap">
                         <h4 className="font-bold text-xs text-stone-900 truncate">{cleanServiceName}</h4>

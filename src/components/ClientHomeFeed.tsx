@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ArrowRight,
   UserCheck,
+  User,
   Star,
   Phone,
   PhoneCall,
@@ -226,12 +227,18 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
             
             {/* Barber Profile & Phone */}
             <div className="flex items-center space-x-3.5">
-              <img
-                src={barberAvatar}
-                alt={latestBooking.designerName}
-                referrerPolicy="no-referrer"
-                className="w-14 h-14 rounded-2xl object-cover border border-[#E4E4E7] shrink-0 shadow-xs"
-              />
+              {barberAvatar && barberAvatar.trim() ? (
+                <img
+                  src={barberAvatar.trim()}
+                  alt={latestBooking.designerName}
+                  referrerPolicy="no-referrer"
+                  className="w-14 h-14 rounded-2xl object-cover border border-[#E4E4E7] shrink-0 shadow-xs"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-2xl bg-emerald-900 flex items-center justify-center text-emerald-300 font-bold border border-emerald-700/50 shrink-0 shadow-xs">
+                  <User className="w-7 h-7" />
+                </div>
+              )}
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
                   <h3 className="font-bold text-sm sm:text-base text-[#18181B]">
@@ -366,12 +373,18 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
                 className="bg-white border border-emerald-100 hover:border-emerald-500 rounded-3xl p-4 cursor-pointer flex flex-col items-center text-center transition-all duration-200 active:scale-98 hover:shadow-md shadow-xs select-none group"
               >
                 <div className="relative mb-3">
-                  <img
-                    src={designer.avatarUrl}
-                    alt={designer.name}
-                    referrerPolicy="no-referrer"
-                    className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border-2 border-emerald-100 group-hover:border-emerald-500 transition-colors shadow-xs"
-                  />
+                  {designer.avatarUrl && designer.avatarUrl.trim() ? (
+                    <img
+                      src={designer.avatarUrl.trim()}
+                      alt={designer.name}
+                      referrerPolicy="no-referrer"
+                      className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border-2 border-emerald-100 group-hover:border-emerald-500 transition-colors shadow-xs"
+                    />
+                  ) : (
+                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-emerald-900 flex items-center justify-center text-emerald-300 font-bold border-2 border-emerald-100 shadow-xs">
+                      <User className="w-12 h-12" />
+                    </div>
+                  )}
                   {designer.featured && (
                     <span className="absolute -top-1.5 -right-1.5 bg-emerald-700 text-white text-[9px] font-bold px-2 py-0.5 rounded-full shadow-xs">
                       ★ Top
@@ -487,12 +500,18 @@ export const ClientHomeFeed: React.FC<ClientHomeFeedProps> = ({
                 className="bg-[#FFFFFF] border border-[#E4E4E7] hover:border-emerald-400 rounded-2xl p-3.5 transition-all flex flex-col justify-between space-y-3 shadow-xs hover:shadow-md"
               >
                 <div className="flex space-x-3">
-                  <img
-                    src={service.imageUrl}
-                    alt={service.name}
-                    referrerPolicy="no-referrer"
-                    className="w-16 h-16 rounded-xl object-cover border border-[#E4E4E7] shrink-0"
-                  />
+                  {service.imageUrl && service.imageUrl.trim() ? (
+                    <img
+                      src={service.imageUrl.trim()}
+                      alt={service.name}
+                      referrerPolicy="no-referrer"
+                      className="w-16 h-16 rounded-xl object-cover border border-[#E4E4E7] shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-emerald-800 to-emerald-950 flex items-center justify-center text-emerald-300 font-bold border border-[#E4E4E7] shrink-0">
+                      <Scissors className="w-7 h-7" />
+                    </div>
+                  )}
                   <div className="min-w-0 flex-1">
                     <h3 className="font-bold text-xs sm:text-sm text-[#18181B] truncate leading-snug">
                       {service.name}
